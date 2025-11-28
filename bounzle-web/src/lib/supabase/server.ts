@@ -1,4 +1,4 @@
-import { createServerClient } from '@supabase/auth-helpers-nextjs'
+import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 
 export const supabase = createServerClient(
@@ -11,12 +11,24 @@ export const supabase = createServerClient(
         return cookieStore.get(name)?.value
       },
       set(name: string, value: string, options: any) {
-        const cookieStore = cookies()
-        cookieStore.set(name, value, options)
+        try {
+          const cookieStore = cookies()
+          cookieStore.set(name, value, options)
+        } catch (error) {
+          // The `set` method was called from a Server Component.
+          // This can be ignored if you have middleware refreshing
+          // user sessions.
+        }
       },
       remove(name: string, options: any) {
-        const cookieStore = cookies()
-        cookieStore.delete(name, options)
+        try {
+          const cookieStore = cookies()
+          cookieStore.delete(name, options)
+        } catch (error) {
+          // The `delete` method was called from a Server Component.
+          // This can be ignored if you have middleware refreshing
+          // user sessions.
+        }
       },
     },
   }

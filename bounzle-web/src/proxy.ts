@@ -1,4 +1,4 @@
-import { createServerClient, type CookieOptions } from '@supabase/auth-helpers-nextjs'
+import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function proxy(request: NextRequest) {
@@ -16,7 +16,7 @@ export async function proxy(request: NextRequest) {
         get(name: string) {
           return request.cookies.get(name)?.value
         },
-        set(name: string, value: string, options: CookieOptions) {
+        set(name: string, value: string, options: any) {
           request.cookies.set({
             name,
             value,
@@ -33,7 +33,7 @@ export async function proxy(request: NextRequest) {
             ...options,
           })
         },
-        remove(name: string, options: CookieOptions) {
+        remove(name: string, options: any) {
           request.cookies.set({
             name,
             value: '',
