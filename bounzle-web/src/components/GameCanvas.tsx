@@ -22,6 +22,7 @@ export default function GameCanvas() {
   const [finalScore, setFinalScore] = useState(0);
   const [rank, setRank] = useState<number | null>(null);
   const [isMuted, setIsMuted] = useState(false);
+  const [continueCount, setContinueCount] = useState(0);
 
   // Handle level generation
   const { generateLevel } = useLevelGenerator();
@@ -35,7 +36,8 @@ export default function GameCanvas() {
     setFinalScore(score);
     setIsDialogOpen(true);
 
-    // Save score to Supabase
+    // Save score to Supabase (only save once per game session, not on each continue)
+    // We'll track if we've already saved for this game session
     if (user) {
       try {
         const newRank = await saveScore(user.id, score);
@@ -89,14 +91,26 @@ export default function GameCanvas() {
     };
   }, [handleGameOver, handleScoreUpdate]);
 
+
   useEffect(() => {
     if (!gameRef.current) return;
 
     const handleLevelGeneration = async () => {
       if (gameRef.current) {
         try {
-          // Generate level data (game will use procedural generation as fallback)
-          const levelData = await generateLevel(Math.floor(Math.random() * 10000), 0);
+          // Get current game state for smooth transitions
+          const lastGapY = gameRef.current.getLastGapY();
+          const canvasHeight = gameRef.current.getCanvasHeight();
+          const checkpoint = Math.floor(gameRef.current.getScore() / 20); // Increment checkpoint every 20 points
+          
+          // Generate level data with context for smooth transitions
+          const levelData = await generateLevel(
+            Math.floor(Math.random() * 10000),
+            checkpoint,
+            lastGapY,
+            canvasHeight
+          );
+          
           if (levelData && gameRef.current) {
             gameRef.current.loadLevelData(levelData);
           }
@@ -110,7 +124,7 @@ export default function GameCanvas() {
     // Generate initial level immediately (game will start with procedural obstacles if this fails)
     handleLevelGeneration();
 
-    // Set up interval for continuous level generation (every 10 seconds)
+    // Set up interval for continuous level generation (every 10 seconds or when chunks run low)
     const interval = setInterval(() => {
       if (gameRef.current && gameRef.current.getStatus() === 'playing') {
         handleLevelGeneration();
@@ -125,6 +139,19 @@ export default function GameCanvas() {
       gameRef.current.start();
       setIsDialogOpen(false);
       setRank(null);
+      setContinueCount(0); // Reset continue count on new game
+    }
+  };
+
+  const handleContinue = () => {
+    if (gameRef.current && continueCount < 3) {
+      gameRef.current.continue();
+      setIsDialogOpen(false);
+      setContinueCount(prev => prev + 1);
+      toast({
+        title: "Continue!",
+        description: `You've continued! (${continueCount + 1}/3)`,
+      });
     }
   };
 
@@ -135,14 +162,9 @@ export default function GameCanvas() {
     }
   };
 
-  const handleReward = (seconds: number) => {
-    if (gameRef.current) {
-      gameRef.current.addExtraTime(seconds);
-      toast({
-        title: "Extra Time!",
-        description: `You gained ${seconds} extra seconds!`,
-      });
-    }
+  const handleReward = () => {
+    // Watch Ad now grants continue ability instead of extra time
+    handleContinue();
   };
 
   return (
@@ -183,7 +205,11 @@ export default function GameCanvas() {
             </div>
             
             <div className="flex flex-col gap-3">
-              <RewardedAdButton onReward={handleReward} />
+              <RewardedAdButton 
+                onReward={handleReward} 
+                disabled={continueCount >= 3}
+                continueCount={continueCount}
+              />
               
               <Button 
                 onClick={restartGame}

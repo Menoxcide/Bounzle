@@ -13,7 +13,15 @@ declare global {
   }
 }
 
-export default function RewardedAdButton({ onReward }: { onReward: (seconds: number) => void }) {
+export default function RewardedAdButton({ 
+  onReward, 
+  disabled = false,
+  continueCount = 0
+}: { 
+  onReward: () => void;
+  disabled?: boolean;
+  continueCount?: number;
+}) {
   const [isAdReady, setIsAdReady] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
@@ -56,6 +64,15 @@ export default function RewardedAdButton({ onReward }: { onReward: (seconds: num
   }, []);
 
   const showRewardedAd = async () => {
+    if (disabled) {
+      toast({
+        title: "Maximum continues reached",
+        description: "You've already continued 3 times!",
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (!isAdReady) {
       toast({
         title: "Ad not ready",
@@ -72,7 +89,7 @@ export default function RewardedAdButton({ onReward }: { onReward: (seconds: num
       // In a real implementation, you would use the AdMob SDK to show the ad
       toast({
         title: "Watching rewarded ad",
-        description: "You'll get extra time after watching the ad!",
+        description: "You'll be able to continue after watching the ad!",
       });
       
       // Simulate ad viewing time
@@ -81,11 +98,11 @@ export default function RewardedAdButton({ onReward }: { onReward: (seconds: num
       // Simulate successful ad completion
       toast({
         title: "Ad completed!",
-        description: "You've earned 5 extra seconds!",
+        description: "You can now continue playing!",
       });
       
-      // Give reward
-      onReward(5);
+      // Give reward (continue ability)
+      onReward();
     } catch (error) {
       console.error('Failed to show rewarded ad:', error);
       toast({
@@ -98,11 +115,18 @@ export default function RewardedAdButton({ onReward }: { onReward: (seconds: num
     }
   };
 
+  const remainingContinues = 3 - continueCount;
+  const buttonText = disabled 
+    ? "Maximum Continues Reached" 
+    : continueCount > 0 
+      ? `Watch Ad to Continue (${remainingContinues} left)`
+      : "Watch Ad to Continue";
+
   return (
     <Button 
       onClick={showRewardedAd}
-      disabled={!isAdReady || isLoading}
-      className="bg-green-600 hover:bg-green-700 text-white"
+      disabled={!isAdReady || isLoading || disabled}
+      className="bg-green-600 hover:bg-green-700 text-white disabled:bg-gray-600 disabled:cursor-not-allowed"
     >
       {isLoading ? (
         <>
@@ -112,7 +136,7 @@ export default function RewardedAdButton({ onReward }: { onReward: (seconds: num
       ) : (
         <>
           <span className="mr-2">🎁</span>
-          Watch Ad for +5s
+          {buttonText}
         </>
       )}
     </Button>

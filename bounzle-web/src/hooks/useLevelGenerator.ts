@@ -3,7 +3,12 @@ import { useState, useCallback } from 'react';
 import { LevelData } from '@/bounzle-game/types';
 
 interface UseLevelGeneratorReturn {
-  generateLevel: (seed: number, checkpoint: number) => Promise<LevelData | null>;
+  generateLevel: (
+    seed: number,
+    checkpoint: number,
+    previousGapY?: number,
+    canvasHeight?: number
+  ) => Promise<LevelData | null>;
   isLoading: boolean;
   error: string | null;
 }
@@ -12,7 +17,12 @@ export const useLevelGenerator = (): UseLevelGeneratorReturn => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const generateLevel = useCallback(async (seed: number, checkpoint: number) => {
+  const generateLevel = useCallback(async (
+    seed: number,
+    checkpoint: number,
+    previousGapY?: number,
+    canvasHeight?: number
+  ) => {
     setIsLoading(true);
     setError(null);
 
@@ -22,7 +32,12 @@ export const useLevelGenerator = (): UseLevelGeneratorReturn => {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ seed, checkpoint }),
+        body: JSON.stringify({
+          seed,
+          checkpoint,
+          previousGapY,
+          canvasHeight
+        }),
       });
 
       if (!response.ok) {

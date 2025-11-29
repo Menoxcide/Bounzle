@@ -44,6 +44,7 @@ export default class Game {
   private checkpoint: number = 0;
   private lastObstacleX: number = 0;
   private obstacleSpacing: number = 250; // Distance between obstacles
+  private lastGapY: number = 0.5; // Track last gap position for smooth transitions
   
   // Callbacks
   private onGameOver?: (score: number) => void;
@@ -162,6 +163,39 @@ export default class Game {
       this.gameLoop(this.lastTime);
     }
   }
+
+  // Continue from game over state (resume playing)
+  continue(): void {
+    if (this.status === 'gameOver') {
+      this.status = 'playing';
+      
+      // Reset ball to a safe position (center of screen, slightly above)
+      this.ball.position.x = 100;
+      this.ball.position.y = this.canvas.height / 2;
+      this.ball.velocity = { x: 0, y: 0 };
+      
+      // Clear any screen shake
+      this.shakeIntensity = 0;
+      this.shakeDuration = 0;
+      this.shakeX = 0;
+      this.shakeY = 0;
+      
+      // Resume game loop
+      this.lastTime = performance.now();
+      this.gameLoop(this.lastTime);
+      
+      // Play continue sound
+      this.soundManager.playPop();
+      
+      // Add particle effect for continue
+      this.particleSystem.addExplosion(
+        this.ball.position.x, 
+        this.ball.position.y, 
+        '#10b981', // green for continue
+        15
+      );
+    }
+  }
   
   // Add extra time from rewarded ad
   addExtraTime(seconds: number): void {
@@ -236,6 +270,16 @@ export default class Game {
     this.generateObstaclesFromChunks();
   }
   
+  // Get the last gap position (normalized 0-1) for smooth level transitions
+  getLastGapY(): number {
+    return this.lastGapY;
+  }
+  
+  // Get canvas height for level generation
+  getCanvasHeight(): number {
+    return this.canvas.height;
+  }
+  
   private generateObstaclesFromChunks(): void {
     // Find the rightmost obstacle position
     let rightmostX = this.canvas.width;
@@ -277,11 +321,17 @@ export default class Game {
           passed: false
         };
         
+        // Update last gap position (normalized)
+        this.lastGapY = chunk.gapY;
+        
         this.currentChunkIndex++;
       } else {
         // Generate procedurally when chunks run out
         obstacle = this.generateProceduralObstacle();
         obstacle.position.x = rightmostX + this.obstacleSpacing;
+        
+        // Update last gap position (normalized)
+        this.lastGapY = obstacle.gapY / this.canvas.height;
       }
       
       this.obstacles.push(obstacle);
