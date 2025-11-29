@@ -13,6 +13,17 @@ export interface HighScore {
   };
 }
 
+interface ScoreApiResponse {
+  id: number;
+  score: number;
+  created_at: string;
+  user_id: string;
+  profiles: {
+    username: string | null;
+    avatar_url: string | null;
+  } | null;
+}
+
 export const useHighScores = (limit: number = 10) => {
   const [scores, setScores] = useState<HighScore[]>([]);
   const [loading, setLoading] = useState(true);
@@ -30,12 +41,12 @@ export const useHighScores = (limit: number = 10) => {
         throw new Error(`Failed to fetch leaderboard: ${response.statusText}`);
       }
 
-      const data = await response.json();
+      const data = await response.json() as ScoreApiResponse[];
       
       // Transform data to match HighScore interface and limit results
       const transformedData = (data || [])
         .slice(0, limit)
-        .map((item: any) => ({
+        .map((item: ScoreApiResponse): HighScore => ({
           ...item,
           profiles: item.profiles || { username: null, avatar_url: null }
         }));
@@ -98,10 +109,10 @@ export const useHighScores = (limit: number = 10) => {
         throw new Error('Failed to fetch scores for rank calculation');
       }
 
-      const allScores = await allScoresResponse.json();
+      const allScores = await allScoresResponse.json() as HighScore[];
       
       // Calculate rank by counting scores higher than this one
-      const rank = allScores.filter((s: HighScore) => s.score > score).length + 1;
+      const rank = allScores.filter((s) => s.score > score).length + 1;
 
       // Refresh the high scores list
       await fetchHighScores();
