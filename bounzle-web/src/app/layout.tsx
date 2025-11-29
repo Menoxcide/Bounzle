@@ -1,7 +1,9 @@
 import './globals.css'
-import type { Metadata } from 'next'
+import type { Metadata, Viewport } from 'next'
 import { Inter } from 'next/font/google'
 import { Toaster } from '@/components/ui/sonner'
+import SupabaseProvider from '@/providers/SupabaseProvider'
+import { createSupabaseServerClient } from '@/lib/supabase/server'
 
 const inter = Inter({ subsets: ['latin'] })
 
@@ -9,15 +11,24 @@ export const metadata: Metadata = {
   title: 'Bounzle - Endless Bouncer',
   description: 'A zesty one-tap endless bouncer with AI-procedural level generation',
   manifest: '/manifest.json',
-  themeColor: '#8b5cf6',
-  viewport: 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no',
 }
 
-export default function RootLayout({
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  themeColor: '#8b5cf6',
+}
+
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
+  const supabase = await createSupabaseServerClient()
+  const { data: { session } } = await supabase.auth.getSession()
+
   return (
     <html lang="en">
       <head>
@@ -41,7 +52,9 @@ export default function RootLayout({
         }} />
       </head>
       <body className={inter.className}>
-        {children}
+        <SupabaseProvider session={session}>
+          {children}
+        </SupabaseProvider>
         <Toaster />
       </body>
     </html>

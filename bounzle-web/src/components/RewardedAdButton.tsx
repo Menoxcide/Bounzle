@@ -6,7 +6,9 @@ import { useToast } from '@/components/ui/use-toast';
 
 declare global {
   interface Window {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     admob?: any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     adsbygoogle?: any;
   }
 }

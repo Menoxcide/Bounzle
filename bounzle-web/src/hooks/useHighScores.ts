@@ -1,5 +1,5 @@
 // Hook for fetching high scores
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase/client';
 
 export interface HighScore {
@@ -18,33 +18,7 @@ export const useHighScores = (limit: number = 10) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchHighScores();
-    
-    // Set up realtime subscription
-    const channel = supabase
-      .channel('high-scores-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'scores',
-        },
-        (payload) => {
-          // Refresh scores when new ones are added
-          fetchHighScores();
-        }
-      )
-      .subscribe();
-
-    // Clean up subscription
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [limit]);
-
-  const fetchHighScores = async () => {
+  const fetchHighScores = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -65,7 +39,17 @@ export const useHighScores = (limit: number = 10) => {
         throw error;
       }
 
-      setScores(data || []);
+      // Transform data to match HighScore interface
+      // Supabase returns profiles as an array, but we expect a single object
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const transformedData = (data || []).map((item: any) => ({
+        ...item,
+        profiles: Array.isArray(item.profiles) && item.profiles.length > 0 
+          ? item.profiles[0] 
+          : item.profiles || { username: '', avatar_url: null }
+      }));
+      
+      setScores(transformedData);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
       setError(errorMessage);
@@ -73,7 +57,69 @@ export const useHighScores = (limit: number = 10) => {
     } finally {
       setLoading(false);
     }
+  }, [limit]);
+
+  useEffect(() => {
+    fetchHighScores();
+    
+    // Set up realtime subscription
+    const channel = supabase
+      .channel('high-scores-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'scores',
+        },
+        () => {
+          // Refresh scores when new ones are added
+          fetchHighScores();
+        }
+      )
+      .subscribe();
+
+    // Clean up subscription
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [fetchHighScores]);
+
+  const saveScore = async (userId: string, score: number): Promise<number> => {
+    try {
+      // Insert the score
+      const { error: insertError } = await supabase
+        .from('scores')
+        .insert({ user_id: userId, score });
+
+      if (insertError) {
+        throw insertError;
+      }
+
+      // Calculate rank by counting scores higher than this one
+      const { data, error: rankError } = await supabase
+        .from('scores')
+        .select('id')
+        .gt('score', score)
+        .order('score', { ascending: false });
+
+      if (rankError) {
+        throw rankError;
+      }
+
+      // Rank is the number of scores higher + 1
+      const rank = (data?.length || 0) + 1;
+
+      // Refresh the high scores list
+      await fetchHighScores();
+
+      return rank;
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
+      console.error('Save score error:', err);
+      throw new Error(`Failed to save score: ${errorMessage}`);
+    }
   };
 
-  return { scores, loading, error, refresh: fetchHighScores };
+  return { scores, loading, error, refresh: fetchHighScores, saveScore };
 };

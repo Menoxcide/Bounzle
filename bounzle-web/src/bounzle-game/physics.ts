@@ -1,10 +1,11 @@
 // Physics calculations
+import { Ball } from './types';
 
 export const GRAVITY = 0.5;
 export const JUMP_FORCE = -12;
 export const SCROLL_SPEED = 3;
 
-export function updateBallPosition(ball: any, deltaTime: number): void {
+export function updateBallPosition(ball: Ball, deltaTime: number): void {
   // Apply gravity
   ball.velocity.y += GRAVITY * ball.gravityScale;
   
@@ -13,11 +14,11 @@ export function updateBallPosition(ball: any, deltaTime: number): void {
   ball.position.y += ball.velocity.y * deltaTime;
 }
 
-export function applyJumpForce(ball: any): void {
+export function applyJumpForce(ball: Ball): void {
   ball.velocity.y = JUMP_FORCE;
 }
 
-export function checkCollision(ball: any, obstacle: any): boolean {
+export function checkCollision(ball: Ball, obstacle: import('./types').Obstacle): boolean {
   // Simple rectangle collision detection
   const ballLeft = ball.position.x - ball.radius;
   const ballRight = ball.position.x + ball.radius;
@@ -40,7 +41,7 @@ export function checkCollision(ball: any, obstacle: any): boolean {
   return false;
 }
 
-export function checkBoundaryCollision(ball: any, canvasHeight: number): boolean {
+export function checkBoundaryCollision(ball: Ball, canvasHeight: number): boolean {
   const ballTop = ball.position.y - ball.radius;
   const ballBottom = ball.position.y + ball.radius;
   

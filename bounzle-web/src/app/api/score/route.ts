@@ -1,5 +1,5 @@
 // API route for saving scores
-import { supabase } from '@/lib/supabase/server'
+import { createSupabaseServerClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 
 export async function POST(request: Request) {
@@ -13,6 +13,8 @@ export async function POST(request: Request) {
         { status: 400 }
       )
     }
+
+    const supabase = await createSupabaseServerClient()
 
     // Get the user session
     const { data: { session }, error: sessionError } = await supabase.auth.getSession()
@@ -57,6 +59,8 @@ export async function POST(request: Request) {
 // GET endpoint to fetch leaderboard
 export async function GET() {
   try {
+    const supabase = await createSupabaseServerClient()
+    
     // Fetch top 50 scores with user profiles
     const { data, error } = await supabase
       .from('scores')

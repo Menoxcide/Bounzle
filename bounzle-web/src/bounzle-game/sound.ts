@@ -8,8 +8,10 @@ export class SoundManager {
   constructor() {
     // Try to create audio context
     try {
-      this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-    } catch (e) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      this.audioContext = new AudioContextClass();
+    } catch {
       console.warn('Web Audio API is not supported in this browser');
     }
   }

@@ -79,7 +79,7 @@ export async function POST(request: Request) {
       console.error('Failed to parse AI response, returning mock data:', parseError)
       levelData = {
         seed: seed,
-        chunks: Array.from({ length: 20 }, (_, i) => ({
+        chunks: Array.from({ length: 20 }, () => ({
           gapY: Math.random() * 0.6 + 0.2, // 0.2 to 0.8
           gapHeight: Math.random() * 0.2 + 0.1, // 0.1 to 0.3
           obstacleType: ['pipe', 'spike', 'moving'][Math.floor(Math.random() * 3)] as 'pipe' | 'spike' | 'moving',
@@ -95,7 +95,7 @@ export async function POST(request: Request) {
     // Return mock data in case of error
     const mockData = {
       seed: Math.floor(Math.random() * 10000),
-      chunks: Array.from({ length: 20 }, (_, i) => ({
+      chunks: Array.from({ length: 20 }, () => ({
         gapY: Math.random() * 0.6 + 0.2,
         gapHeight: Math.random() * 0.2 + 0.1,
         obstacleType: 'pipe',

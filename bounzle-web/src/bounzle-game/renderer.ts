@@ -1,9 +1,10 @@
 // Canvas rendering
 import { Theme, getTheme } from './themes';
+import { Ball, Obstacle } from './types';
 
 export class Renderer {
   private canvas: HTMLCanvasElement;
-  private ctx: CanvasRenderingContext2D;
+  public ctx: CanvasRenderingContext2D;
   private currentTheme: Theme;
   
   constructor(canvas: HTMLCanvasElement) {
@@ -38,7 +39,7 @@ export class Renderer {
     }
   }
   
-  drawBall(ball: any): void {
+  drawBall(ball: Ball): void {
     this.ctx.beginPath();
     this.ctx.arc(ball.position.x, ball.position.y, ball.radius, 0, Math.PI * 2);
     
@@ -72,16 +73,16 @@ export class Renderer {
     this.ctx.closePath();
   }
   
-  drawObstacle(obstacle: any): void {
+  drawObstacle(obstacle: Obstacle): void {
     const gapTop = obstacle.position.y + obstacle.gapY - obstacle.gapHeight / 2;
     const gapBottom = obstacle.position.y + obstacle.gapY + obstacle.gapHeight / 2;
     
     // Use theme colors or obstacle-specific colors
-    let obstacleColor = obstacle.obstacleType === 'neon' ? '#00ff00' : 
-                        obstacle.obstacleType === 'lava' ? '#ef4444' : 
+    const obstacleColor = obstacle.theme === 'neon' ? '#00ff00' : 
+                        obstacle.theme === 'lava' ? '#ef4444' : 
                         this.currentTheme.obstacleColor;
-    let obstacleHighlight = obstacle.obstacleType === 'neon' ? '#00cc00' : 
-                           obstacle.obstacleType === 'lava' ? '#dc2626' : 
+    const obstacleHighlight = obstacle.theme === 'neon' ? '#00cc00' : 
+                           obstacle.theme === 'lava' ? '#dc2626' : 
                            this.currentTheme.obstacleHighlightColor;
     
     // Draw top obstacle

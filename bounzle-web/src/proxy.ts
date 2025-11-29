@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
+import type { CookieSerializeOptions } from 'cookie'
 
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({
@@ -16,7 +17,7 @@ export async function proxy(request: NextRequest) {
         get(name: string) {
           return request.cookies.get(name)?.value
         },
-        set(name: string, value: string, options: any) {
+        set(name: string, value: string, options?: CookieSerializeOptions) {
           request.cookies.set({
             name,
             value,
@@ -33,7 +34,7 @@ export async function proxy(request: NextRequest) {
             ...options,
           })
         },
-        remove(name: string, options: any) {
+        remove(name: string, options?: CookieSerializeOptions) {
           request.cookies.set({
             name,
             value: '',

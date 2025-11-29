@@ -2,7 +2,7 @@
 
 import { Renderer } from './renderer';
 import { InputHandler } from './input';
-import { updateBallPosition, applyJumpForce, checkCollision, checkBoundaryCollision, GRAVITY, SCROLL_SPEED } from './physics';
+import { updateBallPosition, applyJumpForce, checkCollision, checkBoundaryCollision, SCROLL_SPEED } from './physics';
 import { Ball, Obstacle, GameStatus, LevelChunk, LevelData } from './types';
 import { getTheme, getRandomTheme } from './themes';
 import { ParticleSystem } from './particles';

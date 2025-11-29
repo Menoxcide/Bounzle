@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import Game from '@/bounzle-game/Game';
 import { useLevelGenerator } from '@/hooks/useLevelGenerator';
 import { useToast } from '@/components/ui/use-toast';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
+import { CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
 import { useHighScores } from '@/hooks/useHighScores';
@@ -22,6 +22,35 @@ export default function GameCanvas() {
   const [finalScore, setFinalScore] = useState(0);
   const [rank, setRank] = useState<number | null>(null);
   const [isMuted, setIsMuted] = useState(false);
+
+  // Handle level generation
+  const { generateLevel } = useLevelGenerator();
+
+  const handleScoreUpdate = useCallback((score: number) => {
+    // Score is displayed in the game itself
+    console.log('Score updated:', score);
+  }, []);
+
+  const handleGameOver = useCallback(async (score: number) => {
+    setFinalScore(score);
+    setIsDialogOpen(true);
+
+    // Save score to Supabase
+    if (user) {
+      try {
+        const newRank = await saveScore(user.id, score);
+        setRank(newRank);
+      } catch (error) {
+        console.error('Failed to save score:', error);
+      }
+    }
+
+    // Show game over toast
+    toast({
+      title: "Game Over!",
+      description: `Your score: ${score}`,
+    });
+  }, [user, saveScore, toast]);
 
   // Initialize AdMob
   useEffect(() => {
@@ -58,10 +87,7 @@ export default function GameCanvas() {
     return () => {
       game.destroy();
     };
-  }, []);
-
-  // Handle level generation
-  const { generateLevel } = useLevelGenerator();
+  }, [handleGameOver, handleScoreUpdate]);
 
   useEffect(() => {
     const handleLevelGeneration = async () => {
@@ -85,32 +111,6 @@ export default function GameCanvas() {
 
     return () => clearInterval(interval);
   }, [generateLevel]);
-
-  const handleGameOver = async (score: number) => {
-    setFinalScore(score);
-    setIsDialogOpen(true);
-
-    // Save score to Supabase
-    if (user) {
-      try {
-        const newRank = await saveScore(user.id, score);
-        setRank(newRank);
-      } catch (error) {
-        console.error('Failed to save score:', error);
-      }
-    }
-
-    // Show game over toast
-    toast({
-      title: "Game Over!",
-      description: `Your score: ${score}`,
-    });
-  };
-
-  const handleScoreUpdate = (score: number) => {
-    // Score is displayed in the game itself
-    console.log('Score updated:', score);
-  };
 
   const restartGame = () => {
     if (gameRef.current) {

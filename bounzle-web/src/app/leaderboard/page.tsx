@@ -37,7 +37,7 @@ export default function LeaderboardPage() {
           schema: 'public',
           table: 'scores',
         },
-        (payload) => {
+        () => {
           // Add new score to the leaderboard
           fetchLeaderboard()
         }

@@ -3,8 +3,13 @@
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
+}
+
 export default function InstallPrompt() {
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
 
   useEffect(() => {
@@ -12,15 +17,15 @@ export default function InstallPrompt() {
       // Prevent the mini-infobar from appearing on mobile
       e.preventDefault();
       // Stash the event so it can be triggered later
-      setDeferredPrompt(e);
+      setDeferredPrompt(e as BeforeInstallPromptEvent);
       // Show the install prompt
       setShowInstallPrompt(true);
     };
 
-    window.addEventListener('beforeinstallprompt', handler as any);
+    window.addEventListener('beforeinstallprompt', handler);
 
     return () => {
-      window.removeEventListener('beforeinstallprompt', handler as any);
+      window.removeEventListener('beforeinstallprompt', handler);
     };
   }, []);
 
@@ -29,7 +34,7 @@ export default function InstallPrompt() {
       // Show the install prompt
       deferredPrompt.prompt();
       // Wait for the user to respond to the prompt
-      deferredPrompt.userChoice.then((choiceResult: any) => {
+      deferredPrompt.userChoice.then((choiceResult) => {
         if (choiceResult.outcome === 'accepted') {
           console.log('User accepted the install prompt');
         } else {
