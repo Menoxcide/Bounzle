@@ -1,31 +1,10 @@
 // Groq SDK wrapper for level generation
-import Groq from 'groq'
-
-// Type assertion for Groq constructor - package may have incomplete types
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const GroqConstructor = Groq as any as new (config: { apiKey: string }) => {
-  chat: {
-    completions: {
-      create: (params: {
-        model: string;
-        messages: Array<{ role: string; content: string }>;
-        temperature: number;
-        max_tokens: number;
-      }) => Promise<{
-        choices: Array<{
-          message?: {
-            content?: string;
-          };
-        }>;
-      }>;
-    };
-  };
-}
+import Groq from 'groq-sdk'
 
 // Lazy initialization - only create client when needed
-let groqInstance: InstanceType<typeof GroqConstructor> | null = null;
+let groqInstance: Groq | null = null;
 
-function getGroqClient(): InstanceType<typeof GroqConstructor> {
+function getGroqClient(): Groq {
   if (!groqInstance) {
     const apiKey = process.env.GROQ_API_KEY;
     // Validate that apiKey is a non-empty string
@@ -33,7 +12,7 @@ function getGroqClient(): InstanceType<typeof GroqConstructor> {
       throw new Error('GROQ_API_KEY environment variable is not set or is invalid');
     }
     // Ensure we're passing a string (not undefined or other type)
-    groqInstance = new GroqConstructor({
+    groqInstance = new Groq({
       apiKey: String(apiKey).trim(),
     });
   }
