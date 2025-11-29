@@ -47,3 +47,23 @@ export interface LevelData {
   seed: number;
   chunks: LevelChunk[];
 }
+
+// Background system types
+export type BackgroundElementType = 'cloud' | 'circle' | 'triangle' | 'star' | 'gradient';
+
+export interface BackgroundElement {
+  type: BackgroundElementType;
+  x: number;
+  y: number;
+  size: number;
+  opacity: number;
+  color?: string;
+  parallaxSpeed: number; // 0.0 to 1.0, where 1.0 is full scroll speed
+}
+
+export interface BackgroundLayer {
+  elements: BackgroundElement[];
+  parallaxSpeed: number; // Base speed multiplier for this layer (0.2, 0.4, 0.6, 1.0)
+  color: string; // Base color for elements in this layer
+  opacity: number; // Overall opacity of the layer
+}

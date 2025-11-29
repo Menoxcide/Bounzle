@@ -28,11 +28,13 @@ let groqInstance: InstanceType<typeof GroqConstructor> | null = null;
 function getGroqClient(): InstanceType<typeof GroqConstructor> {
   if (!groqInstance) {
     const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) {
-      throw new Error('GROQ_API_KEY environment variable is not set');
+    // Validate that apiKey is a non-empty string
+    if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length === 0) {
+      throw new Error('GROQ_API_KEY environment variable is not set or is invalid');
     }
+    // Ensure we're passing a string (not undefined or other type)
     groqInstance = new GroqConstructor({
-      apiKey: apiKey,
+      apiKey: String(apiKey).trim(),
     });
   }
   return groqInstance;

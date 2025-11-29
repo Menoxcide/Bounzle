@@ -94,19 +94,45 @@ export async function POST(request: Request) {
       prompt += `\n\nPrevious gap center Y position: ${previousGapY.toFixed(2)} (normalized 0-1). Ensure smooth transition from this position.`
     }
 
-    let levelData: LevelData
+    // Initialize with safe fallback (will be overwritten if generation succeeds)
+    let levelData: LevelData = {
+      seed: seed,
+      chunks: []
+    }
+    
+    // Generate safe chunks as initial fallback
+    let currentGapY = startGapY
+    for (let i = 0; i < 20; i++) {
+      const chunk = generateSafeChunk(currentGapY)
+      levelData.chunks.push(chunk)
+      currentGapY = chunk.gapY
+    }
+    
     let validationAttempts = 0
     const maxAttempts = 3
 
     // Try to generate a valid level (with retries)
     while (validationAttempts < maxAttempts) {
       try {
-        const res = await groq.chat.completions.create({
-          model: "llama-3.1-70b-versatile",
-          messages: [{ role: "user", content: prompt + ` Seed: ${seed + validationAttempts}` }],
-          temperature: 0.9,
-          max_tokens: 800,
-        })
+        let res;
+        try {
+          res = await groq.chat.completions.create({
+            model: "llama-3.1-70b-versatile",
+            messages: [{ role: "user", content: prompt + ` Seed: ${seed + validationAttempts}` }],
+            temperature: 0.9,
+            max_tokens: 800,
+          })
+        } catch (groqError: unknown) {
+          // If Groq initialization fails (e.g., missing/invalid API key, slice error), use fallback
+          const errorMessage = (groqError instanceof Error ? groqError.message : String(groqError))
+          if (errorMessage.includes('GROQ_API_KEY') || 
+              errorMessage.includes('slice') || 
+              errorMessage.includes('is not a function')) {
+            console.error('Groq client initialization error:', errorMessage)
+            throw new Error('Groq API configuration error - using safe fallback level')
+          }
+          throw groqError // Re-throw other errors
+        }
 
         // Parse the response
         const content = res.choices[0]?.message?.content
@@ -190,7 +216,7 @@ export async function POST(request: Request) {
           
           let currentGapY = startGapY
           for (let i = 0; i < 20; i++) {
-            const chunk = generateSafeChunk(currentGapY, safeCanvasHeight)
+            const chunk = generateSafeChunk(currentGapY)
             levelData.chunks.push(chunk)
             currentGapY = chunk.gapY
           }
@@ -205,17 +231,14 @@ export async function POST(request: Request) {
     // Return safe fallback data
     // Try to get request body if available, otherwise use defaults
     let previousGapY = 0.5
-    let canvasHeight = 600
     
     try {
       const body = await request.json()
       previousGapY = body.previousGapY ?? 0.5
-      canvasHeight = body.canvasHeight ?? 600
     } catch {
       // Request body already consumed or invalid, use defaults
     }
     
-    const safeCanvasHeight = canvasHeight
     const startGapY = previousGapY
     
     const safeData: LevelData = {

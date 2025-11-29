@@ -43,7 +43,7 @@ export default class Game {
   private currentChunkIndex: number = 0;
   private checkpoint: number = 0;
   private lastObstacleX: number = 0;
-  private obstacleSpacing: number = 250; // Distance between obstacles
+  private obstacleSpacing: number = 800; // Distance between obstacles
   private lastGapY: number = 0.5; // Track last gap position for smooth transitions
   
   // Callbacks
@@ -382,6 +382,10 @@ export default class Game {
     // Update particle system
     this.particleSystem.update(deltaTime);
     
+    // Update background parallax scrolling
+    const scrollSpeed = this.getAdjustedScrollSpeed();
+    this.renderer.updateBackground(scrollSpeed, deltaTime);
+    
     // Update screen shake
     if (this.shakeDuration > 0) {
       this.shakeDuration -= deltaTime;
@@ -467,7 +471,8 @@ export default class Game {
     
     // Continuously generate new obstacles as game progresses
     // Adjust spacing based on difficulty (closer obstacles = harder)
-    this.obstacleSpacing = Math.max(250 - (this.difficulty - 1) * 20, 150);
+    // Maintain wider spacing even at higher difficulties (minimum 600px)
+    this.obstacleSpacing = Math.max(800 - (this.difficulty - 1) * 30, 600);
     this.generateObstaclesFromChunks();
   }
   
