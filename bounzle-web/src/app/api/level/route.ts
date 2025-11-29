@@ -33,7 +33,7 @@ function checkRateLimit(ip: string): { allowed: boolean; resetTime?: number } {
 }
 
 // Generate a safe, playable level chunk
-function generateSafeChunk(previousGapY: number, canvasHeight: number = 600): LevelChunk {
+function generateSafeChunk(previousGapY: number): LevelChunk {
   // Start from previous gap position
   let gapY = previousGapY
   
@@ -128,7 +128,7 @@ export async function POST(request: Request) {
           // Generate safe chunks
           let currentGapY = startGapY
           for (let i = 0; i < 20; i++) {
-            const chunk = generateSafeChunk(currentGapY, safeCanvasHeight)
+            const chunk = generateSafeChunk(currentGapY)
             levelData.chunks.push(chunk)
             currentGapY = chunk.gapY
           }
@@ -171,7 +171,7 @@ export async function POST(request: Request) {
             
             let currentGapY = startGapY
             for (let i = 0; i < 20; i++) {
-              const chunk = generateSafeChunk(currentGapY, safeCanvasHeight)
+              const chunk = generateSafeChunk(currentGapY)
               levelData.chunks.push(chunk)
               currentGapY = chunk.gapY
             }
@@ -225,7 +225,7 @@ export async function POST(request: Request) {
     
     let currentGapY = startGapY
     for (let i = 0; i < 20; i++) {
-      const chunk = generateSafeChunk(currentGapY, safeCanvasHeight)
+      const chunk = generateSafeChunk(currentGapY)
       safeData.chunks.push(chunk)
       currentGapY = chunk.gapY
     }

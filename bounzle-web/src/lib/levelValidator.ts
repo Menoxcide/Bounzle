@@ -10,12 +10,6 @@ const OBSTACLE_WIDTH = 80;
 const OBSTACLE_SPACING = 250; // Base spacing
 const MIN_GAP_HEIGHT = 120; // Absolute minimum in pixels
 
-interface BallState {
-  x: number;
-  y: number;
-  velocityY: number;
-}
-
 /**
  * Simulates ball trajectory to check if a gap is reachable
  */
@@ -40,8 +34,7 @@ function canReachGap(
   }
   
   // Simulate ball trajectory
-  let ballY = startY * canvasHeight;
-  let velocityY = 0;
+  const ballY = startY * canvasHeight;
   const framesToTravel = Math.ceil(distance / SCROLL_SPEED);
   
   // Try different jump strategies (jump immediately, jump later, multiple jumps)
