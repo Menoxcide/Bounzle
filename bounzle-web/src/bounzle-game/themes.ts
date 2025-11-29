@@ -1,5 +1,7 @@
 // Theme management for the game
 
+import type { ThemeKey } from './types';
+
 export interface Theme {
   name: string;
   backgroundColor: string;
@@ -62,4 +64,9 @@ export function getRandomTheme(): Theme {
   const themeKeys = Object.keys(THEMES);
   const randomKey = themeKeys[Math.floor(Math.random() * themeKeys.length)];
   return THEMES[randomKey];
+}
+
+export function getRandomThemeKey(): ThemeKey {
+  const themeKeys = Object.keys(THEMES) as ThemeKey[];
+  return themeKeys[Math.floor(Math.random() * themeKeys.length)];
 }

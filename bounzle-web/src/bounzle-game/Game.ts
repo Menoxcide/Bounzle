@@ -3,8 +3,8 @@
 import { Renderer } from './renderer';
 import { InputHandler } from './input';
 import { updateBallPosition, applyJumpForce, checkCollision, checkBoundaryCollision, SCROLL_SPEED } from './physics';
-import { Ball, Obstacle, GameStatus, LevelChunk, LevelData } from './types';
-import { getTheme, getRandomTheme } from './themes';
+import { Ball, Obstacle, GameStatus, LevelChunk, LevelData, ThemeKey } from './types';
+import { getTheme, getRandomThemeKey } from './themes';
 import { ParticleSystem } from './particles';
 import { SoundManager } from './sound';
 
@@ -22,7 +22,7 @@ export default class Game {
   private score: number = 0;
   private status: GameStatus = 'idle';
   private lastTime: number = 0;
-  private currentTheme: string = 'normal';
+  private currentTheme: ThemeKey = 'normal';
   private lastThemeChangeScore: number = 0;
   
   // Difficulty scaling
@@ -293,7 +293,7 @@ export default class Game {
   private checkThemeChange(): void {
     // Change theme every 500 points
     if (this.score >= this.lastThemeChangeScore + 500) {
-      this.currentTheme = getRandomTheme().name;
+      this.currentTheme = getRandomThemeKey();
       this.renderer.setTheme(this.currentTheme);
       this.lastThemeChangeScore = this.score;
       
@@ -524,7 +524,7 @@ export default class Game {
     return this.score;
   }
   
-  getCurrentTheme(): string {
+  getCurrentTheme(): ThemeKey {
     return this.currentTheme;
   }
   

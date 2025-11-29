@@ -1,5 +1,7 @@
 // Game types and interfaces
 
+export type ThemeKey = 'normal' | 'neon' | 'lava' | 'ocean';
+
 export interface Vector2D {
   x: number;
   y: number;
@@ -19,7 +21,7 @@ export interface Obstacle {
   gapY: number;
   gapHeight: number;
   obstacleType?: 'pipe' | 'spike' | 'moving';
-  theme?: 'normal' | 'neon' | 'lava';
+  theme?: ThemeKey;
   passed?: boolean;
 }
 
@@ -38,7 +40,7 @@ export interface LevelChunk {
   gapY: number;        // center Y of safe gap (0–1 normalized)
   gapHeight: number;   // 0.1–0.3
   obstacleType: 'pipe' | 'spike' | 'moving';
-  theme: 'normal' | 'neon' | 'lava';
+  theme: ThemeKey;
 }
 
 export interface LevelData {
