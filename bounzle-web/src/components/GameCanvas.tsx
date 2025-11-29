@@ -90,24 +90,32 @@ export default function GameCanvas() {
   }, [handleGameOver, handleScoreUpdate]);
 
   useEffect(() => {
+    if (!gameRef.current) return;
+
     const handleLevelGeneration = async () => {
-      if (gameRef.current && gameRef.current.getStatus() === 'playing') {
+      if (gameRef.current) {
         try {
-          const levelData = await generateLevel(1, 0);
+          // Generate level data (game will use procedural generation as fallback)
+          const levelData = await generateLevel(Math.floor(Math.random() * 10000), 0);
           if (levelData && gameRef.current) {
             gameRef.current.loadLevelData(levelData);
           }
         } catch (error) {
           console.error('Failed to generate level:', error);
+          // Game will use procedural generation as fallback
         }
       }
     };
 
-    // Generate initial level
+    // Generate initial level immediately (game will start with procedural obstacles if this fails)
     handleLevelGeneration();
 
-    // Set up interval for continuous level generation
-    const interval = setInterval(handleLevelGeneration, 5000);
+    // Set up interval for continuous level generation (every 10 seconds)
+    const interval = setInterval(() => {
+      if (gameRef.current && gameRef.current.getStatus() === 'playing') {
+        handleLevelGeneration();
+      }
+    }, 10000);
 
     return () => clearInterval(interval);
   }, [generateLevel]);

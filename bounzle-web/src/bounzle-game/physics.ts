@@ -42,8 +42,11 @@ export function checkCollision(ball: Ball, obstacle: import('./types').Obstacle)
 }
 
 export function checkBoundaryCollision(ball: Ball, canvasHeight: number): boolean {
+  // In Flappy Bird style games, boundaries shouldn't cause instant death
+  // Only check for extreme cases where ball is way off screen (safety check)
   const ballTop = ball.position.y - ball.radius;
   const ballBottom = ball.position.y + ball.radius;
   
-  return ballTop < 0 || ballBottom > canvasHeight;
+  // Only trigger if ball is significantly off screen (more than 100px)
+  return ballBottom < -100 || ballTop > canvasHeight + 100;
 }
