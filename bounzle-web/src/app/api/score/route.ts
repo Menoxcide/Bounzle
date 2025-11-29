@@ -61,26 +61,41 @@ export async function GET() {
   try {
     const supabase = await createSupabaseServerClient()
     
-    // Fetch top 50 scores with user profiles
-    const { data, error } = await supabase
+    // Fetch top 50 scores
+    const { data: scoresData, error: scoresError } = await supabase
       .from('scores')
-      .select(`
-        id,
-        score,
-        created_at,
-        user_id,
-        profiles(username, avatar_url)
-      `)
+      .select('id, score, created_at, user_id')
       .order('score', { ascending: false })
       .limit(50)
 
-    if (error) {
-      console.error('Error fetching leaderboard:', error)
+    if (scoresError) {
+      console.error('Error fetching scores:', scoresError)
       return NextResponse.json(
         { error: 'Failed to fetch leaderboard. Please try again.' },
         { status: 500 }
       )
     }
+
+    // Fetch profiles for all user_ids
+    const userIds = scoresData?.map(score => score.user_id).filter(Boolean) || []
+    let profilesMap = new Map()
+    
+    if (userIds.length > 0) {
+      const { data: profilesData } = await supabase
+        .from('profiles')
+        .select('id, username, avatar_url')
+        .in('id', userIds)
+      
+      if (profilesData) {
+        profilesMap = new Map(profilesData.map(profile => [profile.id, profile]))
+      }
+    }
+
+    // Combine scores with profiles
+    const data = scoresData?.map(score => ({
+      ...score,
+      profiles: profilesMap.get(score.user_id) || { username: null, avatar_url: null }
+    })) || []
 
     return NextResponse.json(data)
   } catch (error) {

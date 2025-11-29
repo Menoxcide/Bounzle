@@ -1,7 +1,7 @@
 const CACHE_NAME = 'bounzle-v1.0.0';
 const urlsToCache = [
   '/',
-  '/play',
+  '/game',
   '/leaderboard',
   '/manifest.json',
   '/icons/icon-192x192.png',
@@ -52,7 +52,7 @@ self.addEventListener('fetch', (event) => {
           }
         );
       })
-    );
+  );
 });
 
 self.addEventListener('activate', (event) => {
@@ -69,3 +69,4 @@ self.addEventListener('activate', (event) => {
     })
   );
 });
+

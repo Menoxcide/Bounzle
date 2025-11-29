@@ -4,6 +4,7 @@ import { Inter } from 'next/font/google'
 import { Toaster } from '@/components/ui/sonner'
 import SupabaseProvider from '@/providers/SupabaseProvider'
 import { createSupabaseServerClient } from '@/lib/supabase/server'
+import ServiceWorkerRegistration from '@/components/ServiceWorkerRegistration'
 
 const inter = Inter({ subsets: ['latin'] })
 
@@ -35,27 +36,14 @@ export default async function RootLayout({
         <meta name="theme-color" content="#8b5cf6" />
         <link rel="manifest" href="/manifest.json" />
         <link rel="apple-touch-icon" href="/icons/icon-192x192.png" />
-        <script dangerouslySetInnerHTML={{
-          __html: `
-            if ('serviceWorker' in navigator) {
-              window.addEventListener('load', function() {
-                navigator.serviceWorker.register('/service-worker.js')
-                  .then(function(registration) {
-                    console.log('SW registered: ', registration);
-                  })
-                  .catch(function(registrationError) {
-                    console.log('SW registration failed: ', registrationError);
-                  });
-              });
-            }
-          `
-        }} />
+        <link rel="icon" href="/favicon.ico" />
       </head>
       <body className={inter.className}>
         <SupabaseProvider session={session}>
           {children}
         </SupabaseProvider>
         <Toaster />
+        <ServiceWorkerRegistration />
       </body>
     </html>
   )

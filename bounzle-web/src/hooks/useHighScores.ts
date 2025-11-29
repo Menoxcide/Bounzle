@@ -8,7 +8,7 @@ export interface HighScore {
   created_at: string;
   user_id: string;
   profiles: {
-    username: string;
+    username: string | null;
     avatar_url: string | null;
   };
 }
@@ -23,31 +23,22 @@ export const useHighScores = (limit: number = 10) => {
       setLoading(true);
       setError(null);
       
-      const { data, error } = await supabase
-        .from('scores')
-        .select(`
-          id,
-          score,
-          created_at,
-          user_id,
-          profiles(username, avatar_url)
-        `)
-        .order('score', { ascending: false })
-        .limit(limit);
-
-      if (error) {
-        throw error;
+      // Use API route instead of direct Supabase query to avoid join syntax issues
+      const response = await fetch('/api/score');
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch leaderboard: ${response.statusText}`);
       }
 
-      // Transform data to match HighScore interface
-      // Supabase returns profiles as an array, but we expect a single object
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const transformedData = (data || []).map((item: any) => ({
-        ...item,
-        profiles: Array.isArray(item.profiles) && item.profiles.length > 0 
-          ? item.profiles[0] 
-          : item.profiles || { username: '', avatar_url: null }
-      }));
+      const data = await response.json();
+      
+      // Transform data to match HighScore interface and limit results
+      const transformedData = (data || [])
+        .slice(0, limit)
+        .map((item: any) => ({
+          ...item,
+          profiles: item.profiles || { username: null, avatar_url: null }
+        }));
       
       setScores(transformedData);
     } catch (err) {
@@ -62,7 +53,7 @@ export const useHighScores = (limit: number = 10) => {
   useEffect(() => {
     fetchHighScores();
     
-    // Set up realtime subscription
+    // Set up realtime subscription for score updates
     const channel = supabase
       .channel('high-scores-changes')
       .on(
@@ -87,28 +78,30 @@ export const useHighScores = (limit: number = 10) => {
 
   const saveScore = async (userId: string, score: number): Promise<number> => {
     try {
-      // Insert the score
-      const { error: insertError } = await supabase
-        .from('scores')
-        .insert({ user_id: userId, score });
+      // Use API route to save score
+      const response = await fetch('/api/score', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ score }),
+      });
 
-      if (insertError) {
-        throw insertError;
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to save score');
       }
 
+      // Fetch all scores to calculate rank
+      const allScoresResponse = await fetch('/api/score');
+      if (!allScoresResponse.ok) {
+        throw new Error('Failed to fetch scores for rank calculation');
+      }
+
+      const allScores = await allScoresResponse.json();
+      
       // Calculate rank by counting scores higher than this one
-      const { data, error: rankError } = await supabase
-        .from('scores')
-        .select('id')
-        .gt('score', score)
-        .order('score', { ascending: false });
-
-      if (rankError) {
-        throw rankError;
-      }
-
-      // Rank is the number of scores higher + 1
-      const rank = (data?.length || 0) + 1;
+      const rank = allScores.filter((s: HighScore) => s.score > score).length + 1;
 
       // Refresh the high scores list
       await fetchHighScores();

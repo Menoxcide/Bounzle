@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useSupabase } from '@/providers/SupabaseProvider'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 
@@ -56,6 +56,9 @@ export default function UsernameDialog() {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Welcome! Please set your username</DialogTitle>
+          <DialogDescription>
+            Choose a username to display on the leaderboard.
+          </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <Input

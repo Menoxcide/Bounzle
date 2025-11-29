@@ -7,8 +7,12 @@ const nextConfig = {
         source: '/service-worker.js',
         headers: [
           {
+            key: 'Content-Type',
+            value: 'application/javascript',
+          },
+          {
             key: 'Cache-Control',
-            value: 'public, max-age=43200, immutable',
+            value: 'public, max-age=0, must-revalidate',
           },
           {
             key: 'Service-Worker-Allowed',
@@ -22,6 +26,15 @@ const nextConfig = {
           {
             key: 'Content-Type',
             value: 'application/manifest+json',
+          },
+        ],
+      },
+      {
+        source: '/icons/:path*',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'public, max-age=31536000, immutable',
           },
         ],
       },

@@ -6,7 +6,7 @@ import { useLevelGenerator } from '@/hooks/useLevelGenerator';
 import { useToast } from '@/components/ui/use-toast';
 import { Button } from '@/components/ui/button';
 import { CardContent } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
 import { useHighScores } from '@/hooks/useHighScores';
 import { admobService } from '@/lib/admob';
@@ -160,6 +160,9 @@ export default function GameCanvas() {
         <DialogContent className="bg-slate-800 border-slate-700">
           <DialogHeader>
             <DialogTitle className="text-white">Game Over</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              Your final score and leaderboard rank.
+            </DialogDescription>
           </DialogHeader>
           <CardContent className="space-y-4">
             <div className="text-center py-4">
