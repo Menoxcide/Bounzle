@@ -40,6 +40,18 @@ export async function POST(request: Request) {
 
     if (error) {
       console.error('Error saving score:', error)
+      
+      // Provide helpful error message if table doesn't exist
+      if (error.code === 'PGRST205' || error.message?.includes('Could not find the table')) {
+        return NextResponse.json(
+          { 
+            error: 'Database table not found. Please run the migration: supabase/migrations/20250101_create_scores.sql in your Supabase SQL Editor.',
+            details: error.message 
+          },
+          { status: 500 }
+        )
+      }
+      
       return NextResponse.json(
         { error: 'Failed to save score. Please try again.' },
         { status: 500 }
@@ -70,38 +82,59 @@ export async function GET() {
 
     if (scoresError) {
       console.error('Error fetching scores:', scoresError)
+      
+      // Provide helpful error message if table doesn't exist
+      if (scoresError.code === 'PGRST205' || scoresError.message?.includes('Could not find the table')) {
+        return NextResponse.json(
+          { 
+            error: 'Database table not found. Please run the migration: supabase/migrations/20250101_create_scores.sql in your Supabase SQL Editor.',
+            details: scoresError.message 
+          },
+          { status: 500 }
+        )
+      }
+      
       return NextResponse.json(
-        { error: 'Failed to fetch leaderboard. Please try again.' },
+        { error: `Failed to fetch leaderboard: ${scoresError.message}` },
         { status: 500 }
       )
     }
 
+    // Handle case where no scores exist
+    if (!scoresData || scoresData.length === 0) {
+      return NextResponse.json([])
+    }
+
     // Fetch profiles for all user_ids
-    const userIds = scoresData?.map(score => score.user_id).filter(Boolean) || []
+    const userIds = scoresData.map(score => score.user_id).filter(Boolean)
     let profilesMap = new Map()
     
     if (userIds.length > 0) {
-      const { data: profilesData } = await supabase
+      const { data: profilesData, error: profilesError } = await supabase
         .from('profiles')
         .select('id, username, avatar_url')
         .in('id', userIds)
       
-      if (profilesData) {
+      // Log error but continue - profiles are optional
+      if (profilesError) {
+        console.warn('Error fetching profiles (continuing without profiles):', profilesError)
+      } else if (profilesData) {
         profilesMap = new Map(profilesData.map(profile => [profile.id, profile]))
       }
     }
 
     // Combine scores with profiles
-    const data = scoresData?.map(score => ({
+    const data = scoresData.map(score => ({
       ...score,
       profiles: profilesMap.get(score.user_id) || { username: null, avatar_url: null }
-    })) || []
+    }))
 
     return NextResponse.json(data)
   } catch (error) {
     console.error('Unexpected error fetching leaderboard:', error)
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
     return NextResponse.json(
-      { error: 'An unexpected error occurred. Please try again.' },
+      { error: `An unexpected error occurred: ${errorMessage}` },
       { status: 500 }
     )
   }

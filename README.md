@@ -25,7 +25,7 @@ Bounzle is a modern take on the classic endless bouncer genre. Tap or click to m
 
 - **Frontend**: Next.js 15 (App Router), TypeScript, Tailwind CSS
 - **Game Engine**: Custom HTML5 Canvas implementation
-- **AI Generation**: Groq API (Llama 3.1)
+- **AI Generation**: Groq API (Llama 3.3) or Local Ollama (for development)
 - **Database**: Supabase (PostgreSQL)
 - **Authentication**: Supabase Auth
 - **Deployment**: Vercel
@@ -38,7 +38,7 @@ Bounzle is a modern take on the classic endless bouncer genre. Tap or click to m
 - Node.js 18+
 - npm or yarn
 - Supabase account
-- Groq API key
+- Groq API key (or local Ollama instance for development)
 - AdMob account (for monetization)
 
 ### Installation
@@ -60,6 +60,14 @@ Create a `.env.local` file in the `bounzle-web` directory:
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 GROQ_API_KEY=your_groq_api_key
+
+# Optional: Use local LLM for development
+# Set USE_LOCAL_LLM=true to use a local LLM instance instead of Groq API
+USE_LOCAL_LLM=false
+LOCAL_LLM_PROVIDER=lmstudio  # Options: lmstudio (preferred), nvidia-nim, ollama
+LOCAL_LLM_URL=http://localhost:1234  # LM Studio default, or http://localhost:11434 for Ollama, or https://integrate.api.nvidia.com/v1 for NVIDIA NIM Cloud
+LOCAL_LLM_MODEL=llama-3.3-70b-versatile  # Model name (varies by provider)
+LOCAL_LLM_API_KEY=  # Required for NVIDIA NIM Cloud (NGC API key)
 ```
 
 4. Run the development server:
@@ -118,6 +126,113 @@ Bounzle works as a PWA and can be installed on mobile devices:
 2. Look for the install prompt or use the browser's menu to "Add to Home Screen"
 3. Play the game offline anytime!
 
+## 🧠 Local LLM Setup (Development)
+
+For development, you can use a local LLM instance instead of the Groq API. This is useful for:
+- Testing without API costs
+- Faster iteration during development
+- Working offline
+
+### Setting up LM Studio (Preferred)
+
+1. Download and install LM Studio from [https://lmstudio.ai](https://lmstudio.ai)
+
+2. Download a compatible model (e.g., `llama-3.3-70b-versatile` or `Meta-Llama-3.3-70B-Instruct`)
+
+3. Start the local server in LM Studio:
+   - Open LM Studio
+   - Go to the "Local Server" tab
+   - Click "Start Server" (defaults to `http://localhost:1234`)
+
+4. Configure your `.env.local`:
+   ```env
+   USE_LOCAL_LLM=true
+   LOCAL_LLM_PROVIDER=lmstudio
+   LOCAL_LLM_URL=http://localhost:1234
+   LOCAL_LLM_MODEL=llama-3.3-70b-versatile
+   ```
+
+### Setting up NVIDIA NIM Cloud
+
+1. **Get your NGC API Key:**
+   - Sign up for a free NVIDIA Cloud account at [https://build.nvidia.com](https://build.nvidia.com)
+   - Navigate to your account settings to generate an NGC API key
+   - Copy the API key for use in your environment variables
+
+2. **Find the Model Endpoint:**
+   - Visit the [NVIDIA API Catalog](https://build.nvidia.com) and search for "llama-3.3-70b" or "llama-3.3-70b-instruct"
+   - The model page will show the exact API endpoint URL
+   - Common endpoint format: `https://integrate.api.nvidia.com/v1`
+   - Model names typically follow: `meta/llama-3.3-70b-instruct` or `meta/llama-3.3-70b-versatile`
+
+3. **Configure your `.env.local`:**
+   ```env
+   USE_LOCAL_LLM=true
+   LOCAL_LLM_PROVIDER=nvidia-nim
+   LOCAL_LLM_URL=https://integrate.api.nvidia.com/v1
+   LOCAL_LLM_MODEL=meta/llama-3.3-70b-instruct
+   LOCAL_LLM_API_KEY=your_ngc_api_key_here
+   ```
+
+   **Note:** Replace `meta/llama-3.3-70b-instruct` with the exact model name from the NVIDIA API Catalog. The model name format may vary.
+
+### Setting up Ollama
+
+1. Install Ollama from [https://ollama.ai](https://ollama.ai)
+
+2. Pull the llama-3.3-70b model (or a compatible model):
+   ```bash
+   ollama pull llama3.3:70b
+   ```
+   
+   Note: The 70B model requires significant RAM (40GB+). For development, you can use smaller models:
+   ```bash
+   ollama pull llama3.3:8b  # Much smaller, faster for dev
+   ```
+
+3. Start Ollama (it runs on `http://localhost:11434` by default)
+
+4. Configure your `.env.local`:
+   ```env
+   USE_LOCAL_LLM=true
+   LOCAL_LLM_PROVIDER=ollama
+   LOCAL_LLM_URL=http://localhost:11434
+   LOCAL_LLM_MODEL=llama3.3:70b  # or llama3.3:8b for faster dev
+   ```
+
+### Supported Local LLM Providers
+
+- **LM Studio** (preferred): Easy-to-use GUI, OpenAI-compatible API
+- **NVIDIA NIM**: High-performance inference with API key support
+- **Ollama**: Command-line tool with simple setup
+
+The application will automatically use the local LLM when `USE_LOCAL_LLM=true` is set.
+
+### Quick Reference: NVIDIA NIM Cloud Configuration
+
+**API Endpoint:** `https://integrate.api.nvidia.com/v1`
+
+**Available Models (check [build.nvidia.com](https://build.nvidia.com) for latest):**
+- `meta/llama-3.3-70b-instruct` (recommended)
+- `meta/llama-3.3-70b-versatile` (if available)
+- `meta/llama-3.1-70b-instruct` (alternative)
+
+**Example `.env.local` for NVIDIA NIM Cloud:**
+```env
+USE_LOCAL_LLM=true
+LOCAL_LLM_PROVIDER=nvidia-nim
+LOCAL_LLM_URL=https://integrate.api.nvidia.com/v1
+LOCAL_LLM_MODEL=meta/llama-3.3-70b-instruct
+LOCAL_LLM_API_KEY=your_ngc_api_key_from_build.nvidia.com
+```
+
+**Getting your NGC API Key:**
+1. Visit [https://build.nvidia.com](https://build.nvidia.com)
+2. Sign in or create a free account
+3. Go to your account settings → API Keys
+4. Generate a new API key
+5. Copy it to `LOCAL_LLM_API_KEY` in your `.env.local`
+
 ## 🚀 Deployment
 
 ### Deploy to Vercel (Recommended)
@@ -129,6 +244,7 @@ Bounzle works as a PWA and can be installed on mobile devices:
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
    - `GROQ_API_KEY`
+   - (Optional) `USE_LOCAL_LLM`, `LOCAL_LLM_URL`, `LOCAL_LLM_MODEL` for local development
 5. Deploy!
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/yourusername/bounzle)

@@ -12,6 +12,17 @@ export const metadata: Metadata = {
   title: 'Bounzle - Endless Bouncer',
   description: 'A zesty one-tap endless bouncer with AI-procedural level generation',
   manifest: '/manifest.json',
+  icons: {
+    icon: [
+      { url: '/icons/icon-192x192.png', sizes: '192x192', type: 'image/png' },
+      { url: '/icons/icon-256x256.png', sizes: '256x256', type: 'image/png' },
+      { url: '/icons/icon-384x384.png', sizes: '384x384', type: 'image/png' },
+      { url: '/icons/icon-512x512.png', sizes: '512x512', type: 'image/png' },
+    ],
+    apple: [
+      { url: '/icons/icon-192x192.png', sizes: '192x192', type: 'image/png' },
+    ],
+  },
 }
 
 export const viewport: Viewport = {

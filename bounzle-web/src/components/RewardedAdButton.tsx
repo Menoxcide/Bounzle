@@ -101,8 +101,10 @@ export default function RewardedAdButton({
         description: "You can now continue playing!",
       });
       
-      // Give reward (continue ability)
-      onReward();
+      // Give reward (continue ability) - call after a brief delay to ensure toast is visible
+      setTimeout(() => {
+        onReward();
+      }, 100);
     } catch (error) {
       console.error('Failed to show rewarded ad:', error);
       toast({

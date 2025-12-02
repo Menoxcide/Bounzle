@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const sharp = require('sharp');
 
 // Create icons directory if it doesn't exist
 const iconsDir = path.join(__dirname, '..', 'public', 'icons');
@@ -20,16 +21,26 @@ const createIconSVG = (size) => `
 `;
 
 // Generate icons
-sizes.forEach(size => {
-  const svgContent = createIconSVG(size);
-  const fileName = `icon-${size}x${size}.png`;
-  const filePath = path.join(iconsDir, fileName);
+async function generateIcons() {
+  for (const size of sizes) {
+    const svgContent = createIconSVG(size);
+    const fileName = `icon-${size}x${size}.png`;
+    const filePath = path.join(iconsDir, fileName);
+    
+    try {
+      // Convert SVG to PNG using sharp
+      await sharp(Buffer.from(svgContent))
+        .resize(size, size)
+        .png()
+        .toFile(filePath);
+      
+      console.log(`Created icon: ${fileName}`);
+    } catch (error) {
+      console.error(`Failed to create ${fileName}:`, error);
+    }
+  }
   
-  // For now, we'll create a simple text file indicating this is a placeholder
-  // In a real implementation, you'd convert the SVG to PNG
-  fs.writeFileSync(filePath, svgContent);
-  
-  console.log(`Created placeholder icon: ${fileName}`);
-});
+  console.log('Icon generation complete!');
+}
 
-console.log('Icon generation complete!');
+generateIcons().catch(console.error);

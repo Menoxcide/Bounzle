@@ -38,7 +38,21 @@ export const useHighScores = (limit: number = 10) => {
       const response = await fetch('/api/score');
       
       if (!response.ok) {
-        throw new Error(`Failed to fetch leaderboard: ${response.statusText}`);
+        // Try to get error message from response
+        let errorMessage = `Failed to fetch leaderboard: ${response.statusText}`;
+        try {
+          const errorData = await response.json();
+          if (errorData?.error) {
+            errorMessage = errorData.error;
+          }
+        } catch {
+          // If response isn't JSON, use the status text
+        }
+        
+        // Set error state but don't throw - this prevents dev overlay from showing
+        setError(errorMessage);
+        setScores([]);
+        return;
       }
 
       const data = await response.json() as ScoreApiResponse[];
@@ -55,7 +69,11 @@ export const useHighScores = (limit: number = 10) => {
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
       setError(errorMessage);
-      console.error('High scores fetch error:', err);
+      setScores([]);
+      // Only log to console in development, and use console.warn to avoid dev overlay
+      if (process.env.NODE_ENV === 'development') {
+        console.warn('High scores fetch error:', err);
+      }
     } finally {
       setLoading(false);
     }
@@ -65,25 +83,45 @@ export const useHighScores = (limit: number = 10) => {
     fetchHighScores();
     
     // Set up realtime subscription for score updates
-    const channel = supabase
-      .channel('high-scores-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'scores',
-        },
-        () => {
-          // Refresh scores when new ones are added
-          fetchHighScores();
-        }
-      )
-      .subscribe();
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    
+    try {
+      channel = supabase
+        .channel('high-scores-changes')
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'scores',
+          },
+          () => {
+            // Refresh scores when new ones are added
+            fetchHighScores();
+          }
+        )
+        .subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            // Successfully subscribed
+          } else if (status === 'CHANNEL_ERROR') {
+            // Subscription error - log but don't show in dev overlay
+            if (process.env.NODE_ENV === 'development') {
+              console.warn('Realtime subscription error - continuing without realtime updates');
+            }
+          }
+        });
+    } catch (err) {
+      // If subscription fails, continue without realtime updates
+      if (process.env.NODE_ENV === 'development') {
+        console.warn('Failed to set up realtime subscription:', err);
+      }
+    }
 
     // Clean up subscription
     return () => {
-      supabase.removeChannel(channel);
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
     };
   }, [fetchHighScores]);
 

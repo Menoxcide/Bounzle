@@ -1,4 +1,5 @@
 // AdMob service for handling ads in the Bounzle game
+/// <reference lib="dom" />
 
 class AdMobService {
   private initialized: boolean = false;
@@ -9,20 +10,29 @@ class AdMobService {
   // private bannerAdUnitId: string = 'YOUR_BANNER_AD_UNIT_ID';
   // private rewardedAdUnitId: string = 'YOUR_REWARDED_AD_UNIT_ID';
 
-  async initialize() {
-    if (this.initialized) return;
+  async initialize(): Promise<void> {
+    if (this.initialized) return Promise.resolve();
     
     try {
       // Load AdMob script
       await this.loadAdMobScript();
       
-      // Initialize AdMob
-      if (typeof window !== 'undefined' && window.adsbygoogle) {
-        console.log('AdMob initialized successfully');
-        this.initialized = true;
+      // Wait for adsbygoogle to be available with retry logic
+      let retries = 0;
+      const maxRetries = 10;
+      while (typeof window === 'undefined' || !window.adsbygoogle) {
+        if (retries >= maxRetries) {
+          throw new Error('AdMob script loaded but adsbygoogle not available after retries');
+        }
+        await new Promise(resolve => setTimeout(resolve, 100));
+        retries++;
       }
+      
+      console.log('AdMob initialized successfully');
+      this.initialized = true;
     } catch (error) {
       console.error('Failed to initialize AdMob:', error);
+      throw error;
     }
   }
 
@@ -48,32 +58,60 @@ class AdMobService {
     });
   }
 
-  showBannerAd() {
+  showBannerAd(): void {
     if (!this.initialized) {
-      console.warn('AdMob not initialized');
+      console.warn('AdMob not initialized - banner ad will not be shown');
       return;
     }
 
+    // Double-check that adsbygoogle is available
+    if (typeof window === 'undefined' || !window.adsbygoogle) {
+      console.warn('AdMob script not loaded - banner ad will not be shown');
+      return;
+    }
+
+    // Use requestIdleCallback to avoid blocking the main thread
+    if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+      window.requestIdleCallback(() => this._showBannerAdInternal(), { timeout: 1000 });
+    } else {
+      // Fallback for browsers without requestIdleCallback
+      setTimeout(() => this._showBannerAdInternal(), 0);
+    }
+  }
+
+  private _showBannerAdInternal(): void {
     try {
       // Create or update the banner ad element
       let adElement = document.getElementById('admob-banner');
       if (!adElement) {
         adElement = document.createElement('div');
         adElement.id = 'admob-banner';
-        adElement.style.cssText = `
-          position: fixed;
-          bottom: 0;
-          left: 0;
-          right: 0;
-          height: 50px;
-          z-index: 1000;
-          background: transparent;
-        `;
+        // Use CSS classes instead of inline styles to avoid forced reflow
+        adElement.className = 'admob-banner-container';
+        // Apply styles in a single batch to avoid multiple reflows
+        requestAnimationFrame(() => {
+          if (adElement) {
+            adElement.style.cssText = `
+              position: fixed;
+              bottom: 0;
+              left: 0;
+              right: 0;
+              height: 50px;
+              z-index: 1000;
+              background: transparent;
+            `;
+          }
+        });
         document.body.appendChild(adElement);
       }
 
-      // Clear previous content
-      adElement.innerHTML = '';
+      // Use DocumentFragment to batch DOM operations and avoid reflows
+      const fragment = document.createDocumentFragment();
+      
+      // Clear previous content efficiently
+      while (adElement.firstChild) {
+        adElement.removeChild(adElement.firstChild);
+      }
 
       // Create the ad container
       const ins = document.createElement('ins');
@@ -84,11 +122,18 @@ class AdMobService {
       ins.setAttribute('data-ad-format', 'auto');
       ins.setAttribute('data-full-width-responsive', 'true');
 
-      adElement.appendChild(ins);
+      fragment.appendChild(ins);
+      adElement.appendChild(fragment);
 
-      // Push the ad
+      // Push the ad asynchronously to avoid blocking
       if (window.adsbygoogle) {
-        window.adsbygoogle.push({});
+        requestAnimationFrame(() => {
+          try {
+            window.adsbygoogle.push({});
+          } catch (error) {
+            console.error('Failed to push ad:', error);
+          }
+        });
       }
     } catch (error) {
       console.error('Failed to show banner ad:', error);

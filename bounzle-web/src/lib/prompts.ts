@@ -26,7 +26,7 @@ GENERATION RULES:
 - Avoid creating impossible sequences where the ball cannot physically reach the next gap
 - Consider that the ball falls due to gravity and can only jump upward - it cannot move down faster than gravity allows
 
-Return ONLY valid JSON with this schema:
+Return ONLY valid, COMPLETE JSON with this schema:
 {
   "seed": number,
   "chunks": [
@@ -36,9 +36,11 @@ Return ONLY valid JSON with this schema:
       "obstacleType": "pipe"|"spike"|"moving",
       "theme": "normal"|"neon"|"lava"
     }
-    // Generate 20 chunks with smooth, playable transitions
+    // Generate exactly 20 chunks with smooth, playable transitions
   ]
 }
+
+CRITICAL: The JSON must be COMPLETE with all closing brackets (] and }). Do not truncate the response. Ensure all 20 chunks are included.
 
 Current checkpoint: {checkpoint}. Continue seamlessly from previous level.
 Ensure all gaps are physically reachable and create a smooth, playable experience.

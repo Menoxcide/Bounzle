@@ -1,6 +1,17 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  webpack: (config, { isServer }) => {
+    // Fix for webpack caching issues with vendor chunks
+    if (config.cache && config.cache.type === 'filesystem') {
+      config.cache.buildDependencies = config.cache.buildDependencies || {};
+      
+      // Ensure consistent cache keys for vendor chunks
+      config.cache.version = `${config.cache.version || ''}|vendor-chunk-fix`;
+    }
+    
+    return config;
+  },
   async headers() {
     return [
       {
