@@ -3819,18 +3819,9 @@ export class Renderer {
       this.ctx.restore();
       
       // Draw special effects based on obstacle type and style
+      // Spikes removed as per user request
       
-      if (style === 'spike' || obstacle.obstacleType === 'spike') {
-        // Draw spikes on the edges of the gap
-        this.ctx.fillStyle = obstacleColor;
-        const spikeCount = Math.floor(obstacle.height / 15);
-        for (let i = 0; i < spikeCount; i++) {
-          // Distribute spikes evenly along the wall height, centered in each segment
-          const spikeY = obstacle.position.y + ((i + 0.5) / spikeCount) * obstacle.height;
-          this.drawSpike(gapLeft, spikeY, 8, 12, 'right'); // Left spikes (pointing right)
-          this.drawSpike(gapRight, spikeY, 8, 12, 'left'); // Right spikes (pointing left)
-        }
-      } else if (style === 'moving' || obstacle.obstacleType === 'moving') {
+      if (style === 'moving' || obstacle.obstacleType === 'moving') {
         // Add visual indicator for moving obstacles
         this.ctx.fillStyle = '#fbbf24'; // amber-400
         const arrowCount = Math.floor(obstacle.height / 20);
@@ -3920,6 +3911,69 @@ export class Renderer {
     }
     this.ctx.closePath();
     this.ctx.fill();
+  }
+  
+  // Check if a horizontal wall would block any vertical obstacle's gap
+  private wouldBlockVerticalGap(horizontalWall: Obstacle, verticalObstacles: Obstacle[]): boolean {
+    const wallTop = horizontalWall.position.y;
+    const wallBottom = horizontalWall.position.y + horizontalWall.height;
+    const wallLeft = horizontalWall.position.x;
+    const wallRight = horizontalWall.position.x + horizontalWall.width;
+    
+    // Check each vertical obstacle to see if the horizontal wall overlaps with its gap
+    for (const verticalObstacle of verticalObstacles) {
+      if (!verticalObstacle || verticalObstacle.orientation === 'horizontal') continue;
+      if (typeof verticalObstacle.gapY !== 'number' || typeof verticalObstacle.gapHeight !== 'number') continue;
+      
+      // Calculate vertical obstacle's gap boundaries
+      const gapTop = verticalObstacle.position.y + verticalObstacle.gapY - verticalObstacle.gapHeight / 2;
+      const gapBottom = verticalObstacle.position.y + verticalObstacle.gapY + verticalObstacle.gapHeight / 2;
+      
+      // Check if horizontal wall overlaps with the gap's Y range
+      const overlapsVertically = !(wallBottom < gapTop || wallTop > gapBottom);
+      
+      if (!overlapsVertically) {
+        continue; // No vertical overlap, can't block
+      }
+      
+      // Check if horizontal wall overlaps with the vertical obstacle's X range
+      const verticalLeft = verticalObstacle.position.x;
+      const verticalRight = verticalObstacle.position.x + verticalObstacle.width;
+      
+      // If horizontal wall has a gap, check if the solid parts (left/right segments) block the vertical gap
+      if (horizontalWall.gapX && horizontalWall.gapWidth) {
+        const horizontalGapLeft = horizontalWall.gapX - horizontalWall.gapWidth / 2;
+        const horizontalGapRight = horizontalWall.gapX + horizontalWall.gapWidth / 2;
+        
+        // Check if horizontal gap aligns with vertical obstacle's X position
+        const verticalCenterX = verticalObstacle.position.x + verticalObstacle.width / 2;
+        const gapOverlapsVertical = (horizontalGapLeft <= verticalCenterX && horizontalGapRight >= verticalCenterX);
+        
+        // If horizontal gap aligns with vertical obstacle, it's OK - don't block
+        if (gapOverlapsVertical) {
+          continue; // This wall is OK, check next vertical obstacle
+        }
+        
+        // Check if left solid segment (from wallLeft to horizontalGapLeft) blocks vertical gap
+        const leftSegmentOverlaps = !(horizontalGapLeft < verticalLeft || wallLeft > verticalRight);
+        // Check if right solid segment (from horizontalGapRight to wallRight) blocks vertical gap
+        const rightSegmentOverlaps = !(wallRight < verticalLeft || horizontalGapRight > verticalRight);
+        
+        // If either solid segment overlaps with vertical obstacle's X range, it blocks
+        if (leftSegmentOverlaps || rightSegmentOverlaps) {
+          return true; // Wall blocks the vertical gap
+        }
+      } else {
+        // No gap in horizontal wall - check if entire wall overlaps with vertical obstacle's X range
+        const overlapsHorizontally = !(wallRight < verticalLeft || wallLeft > verticalRight);
+        
+        if (overlapsHorizontally) {
+          return true; // Solid wall blocks the vertical gap
+        }
+      }
+    }
+    
+    return false; // Wall doesn't block any vertical gaps
   }
   
   // Draw a horizontal wall (can be at any Y position)
@@ -5038,7 +5092,7 @@ export class Renderer {
   }
   
   // Draw smooth horizontal walls by merging all walls at the same Y position
-  drawHorizontalWalls(walls: Obstacle[]): void {
+  drawHorizontalWalls(walls: Obstacle[], verticalObstacles?: Obstacle[]): void {
       if (walls.length === 0) return;
 
       // Draw all horizontal walls (they can be at any Y position now)
@@ -5056,6 +5110,13 @@ export class Renderer {
         // Wall is visible if any part of it is on screen (with buffer)
         if (wallRight < -VISIBILITY_BUFFER || wallLeft > this.canvas.width + VISIBILITY_BUFFER) {
           continue; // Wall is completely off-screen
+        }
+        
+        // Check if this horizontal wall would block any vertical gaps
+        if (verticalObstacles && verticalObstacles.length > 0) {
+          if (this.wouldBlockVerticalGap(wall, verticalObstacles)) {
+            continue; // Skip rendering this wall as it would block a vertical gap
+          }
         }
         
         // Wall is visible - render it

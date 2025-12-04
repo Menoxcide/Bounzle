@@ -4265,7 +4265,14 @@ export default class Game {
             visibleHorizontalWalls.push(wall);
           }
         }
-        this.renderer.drawHorizontalWalls(visibleHorizontalWalls);
+        // Pass vertical obstacles so renderer can check if horizontal walls block vertical gaps
+        const visibleVerticalObstacles = this.obstacles.filter(obs => {
+          if (!obs) return false;
+          const obsRight = obs.position.x + obs.width;
+          const obsLeft = obs.position.x;
+          return obsRight >= canvasLeft && obsLeft <= canvasRight;
+        });
+        this.renderer.drawHorizontalWalls(visibleHorizontalWalls, visibleVerticalObstacles);
         
         // Draw connections between horizontal walls and vertical obstacles (only for visible walls)
         for (const wall of visibleHorizontalWalls) {
