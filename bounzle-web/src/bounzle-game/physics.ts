@@ -85,29 +85,62 @@ export function checkCollision(ball: Ball, obstacle: import('./types').Obstacle)
         // Wall has a gap - check if ball is in the gap
         const gapLeft = obstacle.gapX - obstacle.gapWidth / 2;
         const gapRight = obstacle.gapX + obstacle.gapWidth / 2;
-        // Increased padding for more forgiving collision - make it easier to pass through gaps
-        const GAP_HORIZONTAL_PADDING = 30; // Increased from 20 to 30 for more forgiveness
+        // Reduced padding for tighter collision - only small margin for edge cases
+        const GAP_HORIZONTAL_PADDING = 5; // Reduced from 30 to 5 for tighter collision
         const adjustedGapLeft = gapLeft - GAP_HORIZONTAL_PADDING;
         const adjustedGapRight = gapRight + GAP_HORIZONTAL_PADDING;
         
-        // Check if ball is within the gap horizontally (use overlap check for more forgiving)
-        // Ball is in gap if any part of it overlaps with the gap area
-        // Use center of ball for more forgiving check - if ball center is in gap, allow passage
+        // Stricter gap check: ball must be CLEARLY in the gap
+        // The ball center must be within the gap (with small padding) AND
+        // the ball must not be overlapping the wall outside the gap
         const ballCenterX = ball.position.x;
-        const isInGapX = ballCenterX >= adjustedGapLeft && ballCenterX <= adjustedGapRight;
+        const ballCenterInGap = ballCenterX >= adjustedGapLeft && ballCenterX <= adjustedGapRight;
         
-        // Also check if any part of ball overlaps with gap (backup check)
+        // Check if ball overlaps the gap area (for edge cases)
         const ballOverlapsGap = !(ballRight < adjustedGapLeft || ballLeft > adjustedGapRight);
         
-        // Allow passage if ball center is in gap OR if ball overlaps gap
-        const canPassThrough = isInGapX || ballOverlapsGap;
+        // Stricter check: ball can only pass if:
+        // 1. Ball center is clearly in the gap, AND
+        // 2. Ball is not overlapping wall segments outside the gap
+        // This prevents partial overlaps from allowing passage through solid wall parts
+        let canPassThrough = false;
+        
+        if (ballCenterInGap) {
+          // Ball center is in gap - check if ball extends beyond gap boundaries
+          // If ball extends significantly beyond gap, it's hitting the wall
+          const ballExtendsLeft = ballLeft < adjustedGapLeft;
+          const ballExtendsRight = ballRight > adjustedGapRight;
+          
+          // Allow passage only if ball doesn't extend too far beyond gap
+          // Use a small tolerance (half ball radius) for edge cases
+          const tolerance = ball.radius * 0.3;
+          canPassThrough = !ballExtendsLeft && !ballExtendsRight;
+          
+          // If ball slightly extends, still allow if extension is minimal
+          if (!canPassThrough) {
+            const leftExtension = ballExtendsLeft ? adjustedGapLeft - ballLeft : 0;
+            const rightExtension = ballExtendsRight ? ballRight - adjustedGapRight : 0;
+            canPassThrough = leftExtension <= tolerance && rightExtension <= tolerance;
+          }
+        } else if (ballOverlapsGap) {
+          // Ball overlaps gap but center is outside - only allow if most of ball is in gap
+          // Calculate how much of the ball is in the gap
+          const ballInGapLeft = Math.max(ballLeft, adjustedGapLeft);
+          const ballInGapRight = Math.min(ballRight, adjustedGapRight);
+          const ballInGapWidth = Math.max(0, ballInGapRight - ballInGapLeft);
+          const ballTotalWidth = ballRight - ballLeft;
+          const ballInGapRatio = ballTotalWidth > 0 ? ballInGapWidth / ballTotalWidth : 0;
+          
+          // Only allow passage if more than 60% of ball is in gap
+          canPassThrough = ballInGapRatio > 0.6;
+        }
         
         if (COLLISION_DEBUG) {
           console.log(`  Wall bounds: left=${obstacleLeft.toFixed(2)}, right=${obstacleRight.toFixed(2)}`);
           console.log(`  Ball X bounds: left=${ballLeft.toFixed(2)}, right=${ballRight.toFixed(2)}, center=${ballCenterX.toFixed(2)}`);
           console.log(`  Gap check: gapLeft=${gapLeft.toFixed(2)}, gapRight=${gapRight.toFixed(2)}`);
           console.log(`  Adjusted gap: left=${adjustedGapLeft.toFixed(2)}, right=${adjustedGapRight.toFixed(2)}`);
-          console.log(`  Ball center in gap: ${isInGapX}, Ball overlaps gap: ${ballOverlapsGap}, Can pass: ${canPassThrough}`);
+          console.log(`  Ball center in gap: ${ballCenterInGap}, Ball overlaps gap: ${ballOverlapsGap}, Can pass: ${canPassThrough}`);
         }
         
         // If ball is in gap, no collision (allow traversal)

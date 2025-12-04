@@ -3,6 +3,54 @@ import { Theme, getTheme, generateColorVariation } from './themes';
 import { Ball, Obstacle, BackgroundLayer, BackgroundElement, BackgroundElementType, PowerUp } from './types';
 import { getBackgroundThemeForLevel, getBackgroundThemeConfig, BackgroundTheme, BackgroundThemeConfig } from './backgroundThemes';
 
+// LRU Cache implementation for performance optimization
+class LRUCache<K, V> {
+  private cache: Map<K, V>;
+  private maxSize: number;
+  
+  constructor(maxSize: number = 50) {
+    this.maxSize = maxSize;
+    this.cache = new Map();
+  }
+  
+  get(key: K): V | undefined {
+    if (!this.cache.has(key)) {
+      return undefined;
+    }
+    // Move to end (most recently used)
+    const value = this.cache.get(key)!;
+    this.cache.delete(key);
+    this.cache.set(key, value);
+    return value;
+  }
+  
+  set(key: K, value: V): void {
+    if (this.cache.has(key)) {
+      // Update existing - move to end
+      this.cache.delete(key);
+    } else if (this.cache.size >= this.maxSize) {
+      // Remove least recently used (first item)
+      const firstKey = this.cache.keys().next().value;
+      if (firstKey !== undefined) {
+        this.cache.delete(firstKey);
+      }
+    }
+    this.cache.set(key, value);
+  }
+  
+  has(key: K): boolean {
+    return this.cache.has(key);
+  }
+  
+  clear(): void {
+    this.cache.clear();
+  }
+  
+  get size(): number {
+    return this.cache.size;
+  }
+}
+
 export class Renderer {
   private canvas: HTMLCanvasElement;
   public ctx: CanvasRenderingContext2D;
@@ -16,6 +64,14 @@ export class Renderer {
   // Visual effects configuration
   private enableAdvancedEffects: boolean = true;
   private effectIntensity: 'low' | 'medium' | 'high' = 'medium';
+  
+  // Performance optimization caches with LRU eviction
+  private gradientCache: LRUCache<string, CanvasGradient> = new LRUCache(50);
+  private patternCache: LRUCache<string, CanvasPattern | null> = new LRUCache(50);
+  
+  // LOD (Level of Detail) thresholds
+  private readonly LOD_DISTANCE_THRESHOLD = 500; // Distance beyond which LOD kicks in
+  private readonly LOD_SIZE_MULTIPLIER = 0.5; // Size reduction for LOD elements
   
   // Camera offset for following ball through gaps
   private cameraOffsetY: number = 0;
@@ -55,10 +111,41 @@ export class Renderer {
 
   setLevel(level: number): void {
     if (this.currentLevel !== level) {
+      const previousTheme = this.currentBackgroundTheme;
       this.currentLevel = level;
       this.currentBackgroundTheme = getBackgroundThemeForLevel(level);
-      this.initializeBackgroundLayers();
+      
+      // Add transition effect if theme changed
+      if (previousTheme !== this.currentBackgroundTheme && this.enableAdvancedEffects) {
+        // Transition particles will be handled in Game.ts
+        this.initializeBackgroundLayers();
+      } else {
+        this.initializeBackgroundLayers();
+      }
     }
+  }
+  
+  // Apply color grading based on current biome theme
+  applyColorGrading(): void {
+    if (!this.enableAdvancedEffects || this.currentLevel === 1) return;
+    
+    const themeConfig = getBackgroundThemeConfig(this.currentBackgroundTheme);
+    const rgb = this.hexToRgb(themeConfig.backgroundColor);
+    if (!rgb) return;
+    
+    // Apply subtle color overlay based on biome
+    this.ctx.save();
+    this.ctx.globalCompositeOperation = 'overlay';
+    this.ctx.globalAlpha = 0.08; // Very subtle
+    
+    // Create gradient overlay based on biome colors
+    const overlayGradient = this.ctx.createLinearGradient(0, 0, 0, this.canvas.height);
+    overlayGradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.05)`);
+    overlayGradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.12)`);
+    
+    this.ctx.fillStyle = overlayGradient;
+    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    this.ctx.restore();
   }
   
   setCameraOffsetY(offsetY: number): void {
@@ -84,7 +171,9 @@ export class Renderer {
     const layerCount = themeConfig.parallaxSpeeds.length;
     for (let i = 0; i < layerCount; i++) {
       const parallaxSpeed = themeConfig.parallaxSpeeds[i];
-      const elementCount = themeConfig.elementCounts[i] || 10;
+      // Reduce element counts for performance - use 60% of configured count
+      const baseElementCount = themeConfig.elementCounts[i] || 10;
+      const elementCount = Math.floor(baseElementCount * 0.6);
       const opacity = 0.3 + (i * 0.1); // Increase opacity for closer layers
       
       // Get element types for this layer based on theme
@@ -119,9 +208,9 @@ export class Renderer {
       purpleMuted: '#8b5cf6'
     };
     
-    // Generate stars (5-pointed) in yellow, red, purple
+    // Generate stars (5-pointed) in yellow, red, purple - reduced count for performance
     const starColors = [colors.yellow, colors.red, colors.purple];
-    for (let i = 0; i < 15; i++) {
+    for (let i = 0; i < 10; i++) { // Reduced from 15 to 10
       const x = this.random() * this.WORLD_WIDTH;
       const y = this.random() * this.WORLD_HEIGHT;
       const size = 15 + this.random() * 25; // 15-40px
@@ -138,8 +227,8 @@ export class Renderer {
       });
     }
     
-    // Generate circles in purple
-    for (let i = 0; i < 8; i++) {
+    // Generate circles in purple - reduced count for performance
+    for (let i = 0; i < 5; i++) { // Reduced from 8 to 5
       const x = this.random() * this.WORLD_WIDTH;
       const y = this.random() * this.WORLD_HEIGHT;
       const size = 20 + this.random() * 30; // 20-50px
@@ -155,9 +244,9 @@ export class Renderer {
       });
     }
     
-    // Generate polygons (irregular shapes) in teal and muted purple
+    // Generate polygons (irregular shapes) in teal and muted purple - reduced count for performance
     const polygonColors = [colors.teal, colors.purpleMuted];
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 4; i++) { // Reduced from 6 to 4
       const x = this.random() * this.WORLD_WIDTH;
       const y = this.random() * this.WORLD_HEIGHT;
       const size = 25 + this.random() * 35; // 25-60px
@@ -585,17 +674,44 @@ export class Renderer {
     const elementScreenX = element.x; // X is in world space, camera doesn't affect X
     const elementScreenY = element.y - this.cameraOffsetY; // Y is affected by camera offset
     
+    // Calculate distance from viewport center for LOD
+    const viewportCenterX = this.canvas.width / 2;
+    const viewportCenterY = this.canvas.height / 2;
+    const distanceFromCenter = Math.sqrt(
+      Math.pow(elementScreenX - viewportCenterX, 2) + 
+      Math.pow(elementScreenY - viewportCenterY, 2)
+    );
+    
+    // Apply LOD - reduce size and effects for distant elements
+    let effectiveSize = element.size;
+    let useLOD = false;
+    if (distanceFromCenter > this.LOD_DISTANCE_THRESHOLD) {
+      effectiveSize = element.size * this.LOD_SIZE_MULTIPLIER;
+      useLOD = true;
+    }
+    
     // Only draw if element is within viewport bounds (with buffer for off-screen elements)
-    const buffer = element.size * 2; // Buffer to draw slightly off-screen elements
-    if (elementScreenX + element.size + buffer < 0 || 
+    const buffer = effectiveSize * 2; // Buffer to draw slightly off-screen elements
+    if (elementScreenX + effectiveSize + buffer < 0 || 
         elementScreenX - buffer > this.canvas.width ||
-        elementScreenY + element.size + buffer < 0 || 
+        elementScreenY + effectiveSize + buffer < 0 || 
         elementScreenY - buffer > this.canvas.height) {
       return; // Element is outside viewport
     }
     
+    // Skip advanced effects for LOD elements
+    if (useLOD && this.effectIntensity === 'low') {
+      // Skip rendering entirely for very distant low-intensity elements
+      if (distanceFromCenter > this.LOD_DISTANCE_THRESHOLD * 1.5) {
+        return;
+      }
+    }
+    
     this.ctx.save();
-    this.ctx.globalAlpha = element.opacity * layer.opacity;
+    
+    // Reduce opacity for LOD elements
+    const lodOpacityMultiplier = useLOD ? 0.6 : 1.0;
+    this.ctx.globalAlpha = element.opacity * layer.opacity * lodOpacityMultiplier;
     const color = element.color || layer.color;
     
     // Convert world coordinates to screen coordinates (account for camera offset)
@@ -604,108 +720,377 @@ export class Renderer {
     const screenY = elementScreenY;
     
     // Apply rotation if element has it (use screen coordinates)
-    if (element.rotation !== undefined) {
+    if (element.rotation !== undefined && !useLOD) {
       this.ctx.translate(screenX, screenY);
       this.ctx.rotate(element.rotation * Math.PI / 180);
       this.ctx.translate(-screenX, -screenY);
     }
     
-    // Add glow effects before drawing elements
+    // Add glow effects before drawing elements (skip for LOD)
     const time = Date.now() / 1000; // For pulsing effects
     const pulsePhase = time * 2 + element.x * 0.01; // Unique phase per element
     
+    // Use effective size for rendering
+    // Use effective size for rendering (don't modify element)
+    const renderSize = effectiveSize;
+    
     switch (element.type) {
       case 'cloud':
-        this.drawCloud(screenX, screenY, element.size, color);
+        this.drawCloud(screenX, screenY, renderSize, color);
         break;
       case 'circle':
-        this.drawCircle(screenX, screenY, element.size, color);
-        // Add subtle glow to circles
-        this.drawGlowAura(screenX, screenY, element.size, color, 'soft');
+        this.drawCircle(screenX, screenY, renderSize, color);
+        // Add subtle glow to circles (skip for LOD)
+        if (!useLOD) {
+          this.drawGlowAura(screenX, screenY, renderSize, color, 'soft');
+        }
         break;
       case 'triangle':
-        this.drawTriangle(screenX, screenY, element.size, color);
+        this.drawTriangle(screenX, screenY, renderSize, color);
         break;
       case 'star':
-        // Draw glow first, then star
-        this.drawGlowAura(screenX, screenY, element.size, color, 'intense');
-        this.drawStar(screenX, screenY, element.size, color);
-        // Add sparkles around bright stars
-        if (this.effectIntensity !== 'low') {
+        // Draw glow first, then star (skip glow for LOD)
+        if (!useLOD) {
+          this.drawGlowAura(screenX, screenY, renderSize, color, 'intense');
+        }
+        this.drawStar(screenX, screenY, renderSize, color);
+        // Add sparkles around bright stars (skip for LOD)
+        if (!useLOD && this.effectIntensity !== 'low') {
           this.drawSparkles(screenX, screenY, 4, color);
         }
         break;
       case 'gradient':
-        this.drawGradientCircle(screenX, screenY, element.size, color);
-        // Add outer glow
-        this.drawGlowAura(screenX, screenY, element.size, color, 'soft');
+        this.drawGradientCircle(screenX, screenY, renderSize, color);
+        // Add outer glow (skip for LOD)
+        if (!useLOD) {
+          this.drawGlowAura(screenX, screenY, renderSize, color, 'soft');
+        }
         break;
       case 'planet':
-        // Draw outer glow aura first
-        this.drawGlowAura(screenX, screenY, element.size, color, 'soft');
-        this.drawPlanet(screenX, screenY, element.size, color, element.variant || 0);
+        // Draw outer glow aura first (skip for LOD)
+        if (!useLOD) {
+          this.drawGlowAura(screenX, screenY, renderSize, color, 'soft');
+        }
+        this.drawPlanet(screenX, screenY, renderSize, color, element.variant || 0);
         break;
       case 'nebula':
-        // Draw soft outer glow that extends beyond nebula
-        this.drawGlowAura(screenX, screenY, element.size * 1.5, color, 'soft');
-        this.drawNebula(screenX, screenY, element.size, color);
+        // Draw soft outer glow that extends beyond nebula (skip for LOD)
+        if (!useLOD) {
+          this.drawGlowAura(screenX, screenY, renderSize * 1.5, color, 'soft');
+        }
+        this.drawNebula(screenX, screenY, renderSize, color);
         break;
       case 'asteroid':
-        this.drawAsteroid(screenX, screenY, element.size, color);
+        this.drawAsteroid(screenX, screenY, renderSize, color);
         break;
       case 'bubble':
-        // Draw inner and outer glow for depth
-        this.drawGlowAura(screenX, screenY, element.size, color, 'soft');
-        this.drawBubble(screenX, screenY, element.size, color);
+        // Draw inner and outer glow for depth (skip for LOD)
+        if (!useLOD) {
+          this.drawGlowAura(screenX, screenY, renderSize, color, 'soft');
+        }
+        this.drawBubble(screenX, screenY, renderSize, color);
         break;
       case 'coral':
-        this.drawCoral(screenX, screenY, element.size, color, element.variant || 0);
+        this.drawCoral(screenX, screenY, renderSize, color, element.variant || 0);
         break;
       case 'seaweed':
-        this.drawSeaweed(screenX, screenY, element.size, color);
+        this.drawSeaweed(screenX, screenY, renderSize, color);
         break;
       case 'fish':
-        this.drawFish(screenX, screenY, element.size, color);
+        this.drawFish(screenX, screenY, renderSize, color);
         break;
       case 'building':
-        this.drawBuilding(screenX, screenY, element.size, color, element.variant || 0);
+        this.drawBuilding(screenX, screenY, renderSize, color, element.variant || 0);
         break;
       case 'window':
-        // Draw warm glow from lit windows
-        this.drawGlowAura(screenX, screenY, element.size, '#ffd700', 'soft');
-        this.drawWindow(screenX, screenY, element.size, color);
+        // Draw warm glow from lit windows (skip for LOD)
+        if (!useLOD) {
+          this.drawGlowAura(screenX, screenY, renderSize, '#ffd700', 'soft');
+        }
+        this.drawWindow(screenX, screenY, renderSize, color);
         break;
       case 'light':
-        // Enhanced glow with pulsing effect
-        this.drawGlowAura(screenX, screenY, element.size, color, 'pulsing', pulsePhase);
-        this.drawLight(screenX, screenY, element.size, color);
-        // Add light rays
-        this.drawLightRays(screenX, screenY, element.size, color, 6);
+        // Enhanced glow with pulsing effect (skip for LOD)
+        if (!useLOD) {
+          this.drawGlowAura(screenX, screenY, renderSize, color, 'pulsing', pulsePhase);
+          // Add light rays
+          this.drawLightRays(screenX, screenY, renderSize, color, 6);
+        }
+        this.drawLight(screenX, screenY, renderSize, color);
         break;
       case 'tree':
-        this.drawTree(screenX, screenY, element.size, color);
+        this.drawTree(screenX, screenY, renderSize, color);
         break;
       case 'leaf':
-        this.drawLeaf(screenX, screenY, element.size, color);
+        this.drawLeaf(screenX, screenY, renderSize, color);
         break;
       case 'branch':
-        this.drawBranch(screenX, screenY, element.size, color);
+        this.drawBranch(screenX, screenY, renderSize, color);
         break;
       case 'mountain':
-        this.drawMountain(screenX, screenY, element.size, color);
+        this.drawMountain(screenX, screenY, renderSize, color);
         break;
       case 'grid':
-        this.drawGrid(screenX, screenY, element.size, color);
+        this.drawGrid(screenX, screenY, renderSize, color);
         break;
       case 'pattern':
-        this.drawPattern(screenX, screenY, element.size, color, element.variant || 0);
+        this.drawPattern(screenX, screenY, renderSize, color, element.variant || 0);
         break;
       case 'isometric':
       case 'cube':
-        this.drawIsometricCube(screenX, screenY, element.size, color);
+        this.drawIsometricCube(screenX, screenY, renderSize, color);
         break;
       case 'pyramid':
-        this.drawIsometricPyramid(screenX, screenY, element.size, color);
+        this.drawIsometricPyramid(screenX, screenY, renderSize, color);
+        break;
+      // Desert biome elements
+      case 'sanddune':
+        this.drawSandDune(screenX, screenY, renderSize, color);
+        break;
+      case 'cactus':
+        this.drawCactus(screenX, screenY, renderSize, color, element.variant || 0);
+        break;
+      case 'mirage':
+        this.drawMirage(screenX, screenY, renderSize, color);
+        break;
+      case 'sunray':
+        if (!useLOD) {
+          this.drawSunRay(screenX, screenY, renderSize, color);
+        }
+        break;
+      // Arctic biome elements
+      case 'icecrystal':
+        this.drawIceCrystal(screenX, screenY, renderSize, color);
+        break;
+      case 'aurora':
+        if (!useLOD) {
+          this.drawAurora(screenX, screenY, renderSize, color);
+        }
+        break;
+      case 'snowflake':
+        this.drawSnowflake(screenX, screenY, renderSize, color);
+        break;
+      case 'glacier':
+        this.drawGlacier(screenX, screenY, renderSize, color);
+        break;
+      // Volcanic biome elements
+      case 'lavaflow':
+        this.drawLavaFlow(screenX, screenY, renderSize, color);
+        break;
+      case 'ember':
+        if (!useLOD) {
+          this.drawGlowAura(screenX, screenY, renderSize, color, 'pulsing', pulsePhase);
+        }
+        this.drawEmber(screenX, screenY, renderSize, color);
+        break;
+      case 'smoke':
+        this.drawSmoke(screenX, screenY, renderSize, color);
+        break;
+      case 'magmabubble':
+        this.drawMagmaBubble(screenX, screenY, renderSize, color);
+        break;
+      // Cyberpunk biome elements
+      case 'neonsign':
+        if (!useLOD) {
+          this.drawGlowAura(screenX, screenY, renderSize, color, 'intense');
+        }
+        this.drawNeonSign(screenX, screenY, renderSize, color);
+        break;
+      case 'hologram':
+        this.drawHologram(screenX, screenY, renderSize, color);
+        break;
+      case 'digitalrain':
+        this.drawDigitalRain(screenX, screenY, renderSize, color);
+        break;
+      case 'gridline':
+        this.drawGridLine(screenX, screenY, renderSize, color);
+        break;
+      // Candy Land biome elements
+      case 'gumdrop':
+        this.drawGumdrop(screenX, screenY, renderSize, color);
+        break;
+      case 'lollipop':
+        this.drawLollipop(screenX, screenY, renderSize, color);
+        break;
+      case 'candycane':
+        this.drawCandyCane(screenX, screenY, renderSize, color);
+        break;
+      case 'sprinkle':
+        this.drawSprinkle(screenX, screenY, renderSize, color);
+        break;
+      // Underwater Cave biome elements
+      case 'bioluminescence':
+        if (!useLOD) {
+          this.drawGlowAura(screenX, screenY, renderSize, color, 'pulsing', pulsePhase);
+        }
+        this.drawBioluminescence(screenX, screenY, renderSize, color);
+        break;
+      case 'stalactite':
+        this.drawStalactite(screenX, screenY, renderSize, color);
+        break;
+      // Crystal Cavern biome elements
+      case 'gemstone':
+        if (!useLOD) {
+          this.drawGlowAura(screenX, screenY, renderSize, color, 'intense');
+        }
+        this.drawGemstone(screenX, screenY, renderSize, color);
+        break;
+      case 'lightrefraction':
+        if (!useLOD) {
+          this.drawLightRefraction(screenX, screenY, renderSize, color);
+        }
+        break;
+      case 'crystalformation':
+        this.drawCrystalFormation(screenX, screenY, renderSize, color, element.variant || 0);
+        break;
+      case 'sparkle':
+        if (!useLOD) {
+          this.drawSparkles(screenX, screenY, 3, color);
+        }
+        break;
+      // Mushroom Forest biome elements
+      case 'mushroom':
+        this.drawMushroom(screenX, screenY, renderSize, color, element.variant || 0);
+        break;
+      case 'spore':
+        this.drawSpore(screenX, screenY, renderSize, color);
+        break;
+      case 'glowingcap':
+        if (!useLOD) {
+          this.drawGlowAura(screenX, screenY, renderSize, color, 'pulsing', pulsePhase);
+        }
+        this.drawGlowingCap(screenX, screenY, renderSize, color);
+        break;
+      case 'mycelium':
+        this.drawMycelium(screenX, screenY, renderSize, color);
+        break;
+      // Cloud Kingdom biome elements
+      case 'rainbow':
+        if (!useLOD) {
+          this.drawRainbow(screenX, screenY, renderSize);
+        }
+        break;
+      case 'lightning':
+        if (!useLOD) {
+          this.drawLightning(screenX, screenY, renderSize, color);
+        }
+        break;
+      case 'skypalace':
+        this.drawSkyPalace(screenX, screenY, renderSize, color);
+        break;
+      // Neon City biome elements
+      case 'skyscraper':
+        this.drawSkyscraper(screenX, screenY, renderSize, color, element.variant || 0);
+        break;
+      case 'trafficlight':
+        this.drawTrafficLight(screenX, screenY, renderSize, color);
+        break;
+      case 'billboard':
+        this.drawBillboard(screenX, screenY, renderSize, color);
+        break;
+      // Jungle biome elements
+      case 'vine':
+        this.drawVine(screenX, screenY, renderSize, color);
+        break;
+      case 'tropicalflower':
+        this.drawTropicalFlower(screenX, screenY, renderSize, color);
+        break;
+      case 'waterfall':
+        this.drawWaterfall(screenX, screenY, renderSize, color);
+        break;
+      case 'exoticbird':
+        this.drawExoticBird(screenX, screenY, renderSize, color);
+        break;
+      // Graveyard biome elements
+      case 'tombstone':
+        this.drawTombstone(screenX, screenY, renderSize, color);
+        break;
+      case 'mist':
+        this.drawMist(screenX, screenY, renderSize, color);
+        break;
+      case 'ghost':
+        if (!useLOD) {
+          this.drawGlowAura(screenX, screenY, renderSize, '#ffffff', 'soft');
+        }
+        this.drawGhost(screenX, screenY, renderSize, color);
+        break;
+      case 'moonlight':
+        if (!useLOD) {
+          this.drawMoonlight(screenX, screenY, renderSize, color);
+        }
+        break;
+      // Ocean Depths biome elements
+      case 'deepseacreature':
+        this.drawDeepSeaCreature(screenX, screenY, renderSize, color);
+        break;
+      case 'kelpforest':
+        this.drawKelpForest(screenX, screenY, renderSize, color);
+        break;
+      case 'bioluminescentfish':
+        if (!useLOD) {
+          this.drawGlowAura(screenX, screenY, renderSize, color, 'pulsing', pulsePhase);
+        }
+        this.drawBioluminescentFish(screenX, screenY, renderSize, color);
+        break;
+      // Sunset Beach biome elements
+      case 'palmtree':
+        this.drawPalmTree(screenX, screenY, renderSize, color);
+        break;
+      case 'wave':
+        this.drawWave(screenX, screenY, renderSize, color);
+        break;
+      case 'seagull':
+        this.drawSeagull(screenX, screenY, renderSize, color);
+        break;
+      case 'sunsetgradient':
+        if (!useLOD) {
+          this.drawSunsetGradient(screenX, screenY, renderSize);
+        }
+        break;
+      // Magical Forest biome elements
+      case 'fairylight':
+        if (!useLOD) {
+          this.drawGlowAura(screenX, screenY, renderSize, color, 'pulsing', pulsePhase);
+        }
+        this.drawFairyLight(screenX, screenY, renderSize, color);
+        break;
+      case 'enchantedtree':
+        this.drawEnchantedTree(screenX, screenY, renderSize, color);
+        break;
+      case 'firefly':
+        if (!useLOD) {
+          this.drawGlowAura(screenX, screenY, renderSize, color, 'pulsing', pulsePhase);
+        }
+        this.drawFirefly(screenX, screenY, renderSize, color);
+        break;
+      case 'magicorb':
+        if (!useLOD) {
+          this.drawGlowAura(screenX, screenY, renderSize, color, 'intense');
+        }
+        this.drawMagicOrb(screenX, screenY, renderSize, color);
+        break;
+      // Industrial biome elements
+      case 'gear':
+        this.drawGear(screenX, screenY, renderSize, color);
+        break;
+      case 'steam':
+        this.drawSteam(screenX, screenY, renderSize, color);
+        break;
+      case 'factory':
+        this.drawFactory(screenX, screenY, renderSize, color);
+        break;
+      // Retro Arcade biome elements
+      case 'pixelart':
+        this.drawPixelArt(screenX, screenY, renderSize, color);
+        break;
+      case 'eightbitpattern':
+        this.drawEightBitPattern(screenX, screenY, renderSize, color);
+        break;
+      case 'arcade':
+        this.drawArcade(screenX, screenY, renderSize, color);
+        break;
+      case 'pixelstar':
+        this.drawPixelStar(screenX, screenY, renderSize, color);
         break;
     }
     
@@ -1332,10 +1717,1419 @@ export class Renderer {
     this.ctx.fill();
   }
   
+  // Desert biome drawing functions
+  private drawSandDune(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    const gradient = this.ctx.createLinearGradient(x - size/2, y, x + size/2, y);
+    gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.6)`);
+    gradient.addColorStop(0.5, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.8)`);
+    gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.6)`);
+    
+    this.ctx.fillStyle = gradient;
+    this.ctx.beginPath();
+    this.ctx.moveTo(x - size/2, y);
+    this.ctx.quadraticCurveTo(x, y - size/3, x + size/2, y);
+    this.ctx.closePath();
+    this.ctx.fill();
+  }
+  
+  private drawCactus(x: number, y: number, size: number, color: string, variant: number): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    const baseY = y + size/2;
+    const trunkWidth = size * 0.15;
+    const trunkHeight = size * 0.6;
+    
+    // Draw main trunk
+    this.ctx.fillStyle = color;
+    this.ctx.fillRect(x - trunkWidth/2, baseY - trunkHeight, trunkWidth, trunkHeight);
+    
+    // Draw arms/branches
+    if (variant > 0) {
+      const armWidth = trunkWidth * 0.8;
+      const armHeight = size * 0.3;
+      // Left arm
+      this.ctx.fillRect(x - trunkWidth/2 - armWidth, baseY - trunkHeight * 0.7, armWidth, armHeight);
+      // Right arm
+      this.ctx.fillRect(x + trunkWidth/2, baseY - trunkHeight * 0.5, armWidth, armHeight);
+    }
+  }
+  
+  private drawMirage(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw wavy mirage effect
+    this.ctx.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.3)`;
+    this.ctx.lineWidth = 2;
+    this.ctx.beginPath();
+    for (let i = 0; i < 5; i++) {
+      const waveX = x - size/2 + (i / 4) * size;
+      const waveY = y + Math.sin(i * 0.5) * size * 0.1;
+      if (i === 0) this.ctx.moveTo(waveX, waveY);
+      else this.ctx.lineTo(waveX, waveY);
+    }
+    this.ctx.stroke();
+  }
+  
+  private drawSunRay(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw sun rays
+    this.drawLightRays(x, y, size, color, 8);
+    
+    // Draw sun center
+    const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, size/2);
+    gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 1)`);
+    gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+    this.ctx.fillStyle = gradient;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, size/2, 0, Math.PI * 2);
+    this.ctx.fill();
+  }
+  
+  // Arctic biome drawing functions
+  private drawIceCrystal(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw hexagonal ice crystal
+    this.ctx.fillStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.7)`;
+    this.ctx.strokeStyle = `rgba(255, 255, 255, 0.8)`;
+    this.ctx.lineWidth = 2;
+    
+    this.ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const angle = (i / 6) * Math.PI * 2;
+      const px = x + Math.cos(angle) * size/2;
+      const py = y + Math.sin(angle) * size/2;
+      if (i === 0) this.ctx.moveTo(px, py);
+      else this.ctx.lineTo(px, py);
+    }
+    this.ctx.closePath();
+    this.ctx.fill();
+    this.ctx.stroke();
+  }
+  
+  private drawAurora(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw flowing aurora bands
+    this.ctx.save();
+    for (let i = 0; i < 3; i++) {
+      const gradient = this.ctx.createLinearGradient(x - size/2, y + i * size/4, x + size/2, y + i * size/4);
+      gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+      gradient.addColorStop(0.5, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.6)`);
+      gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+      
+      this.ctx.fillStyle = gradient;
+      this.ctx.beginPath();
+      this.ctx.moveTo(x - size/2, y + i * size/4);
+      this.ctx.quadraticCurveTo(x, y + i * size/4 + size/8, x + size/2, y + i * size/4);
+      this.ctx.lineTo(x + size/2, y + i * size/4 + size/6);
+      this.ctx.quadraticCurveTo(x, y + i * size/4 + size/8 + size/6, x - size/2, y + i * size/4 + size/6);
+      this.ctx.closePath();
+      this.ctx.fill();
+    }
+    this.ctx.restore();
+  }
+  
+  private drawSnowflake(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    this.ctx.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.8)`;
+    this.ctx.lineWidth = 2;
+    
+    // Draw 6-armed snowflake
+    for (let i = 0; i < 6; i++) {
+      const angle = (i / 6) * Math.PI * 2;
+      this.ctx.beginPath();
+      this.ctx.moveTo(x, y);
+      this.ctx.lineTo(x + Math.cos(angle) * size/2, y + Math.sin(angle) * size/2);
+      this.ctx.stroke();
+      
+      // Add side branches
+      const branchAngle1 = angle + Math.PI / 6;
+      const branchAngle2 = angle - Math.PI / 6;
+      this.ctx.beginPath();
+      this.ctx.moveTo(x + Math.cos(angle) * size/3, y + Math.sin(angle) * size/3);
+      this.ctx.lineTo(x + Math.cos(branchAngle1) * size/2, y + Math.sin(branchAngle1) * size/2);
+      this.ctx.stroke();
+      this.ctx.beginPath();
+      this.ctx.moveTo(x + Math.cos(angle) * size/3, y + Math.sin(angle) * size/3);
+      this.ctx.lineTo(x + Math.cos(branchAngle2) * size/2, y + Math.sin(branchAngle2) * size/2);
+      this.ctx.stroke();
+    }
+  }
+  
+  private drawGlacier(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    const gradient = this.ctx.createLinearGradient(x, y - size/2, x, y + size/2);
+    gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.9)`);
+    gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.5)`);
+    
+    this.ctx.fillStyle = gradient;
+    this.ctx.beginPath();
+    this.ctx.moveTo(x - size/2, y + size/2);
+    this.ctx.lineTo(x, y - size/2);
+    this.ctx.lineTo(x + size/2, y + size/2);
+    this.ctx.closePath();
+    this.ctx.fill();
+  }
+  
+  // Volcanic biome drawing functions
+  private drawLavaFlow(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw flowing lava
+    const gradient = this.ctx.createLinearGradient(x, y - size/2, x, y + size/2);
+    gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.8)`);
+    gradient.addColorStop(0.5, `rgba(${rgb.r + 30}, ${rgb.g}, ${rgb.b - 30}, 1)`);
+    gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.6)`);
+    
+    this.ctx.fillStyle = gradient;
+    this.ctx.beginPath();
+    this.ctx.moveTo(x - size/2, y + size/2);
+    this.ctx.quadraticCurveTo(x, y, x + size/2, y + size/2);
+    this.ctx.lineTo(x + size/2, y);
+    this.ctx.quadraticCurveTo(x, y - size/2, x - size/2, y);
+    this.ctx.closePath();
+    this.ctx.fill();
+  }
+  
+  private drawEmber(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, size/2);
+    gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 1)`);
+    gradient.addColorStop(0.5, `rgba(${rgb.r + 50}, ${rgb.g + 20}, 0, 0.8)`);
+    gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+    
+    this.ctx.fillStyle = gradient;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, size/2, 0, Math.PI * 2);
+    this.ctx.fill();
+  }
+  
+  private drawSmoke(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw wispy smoke clouds
+    for (let i = 0; i < 3; i++) {
+      const offsetX = (i - 1) * size/3;
+      const offsetY = -i * size/4;
+      const cloudSize = size * (0.4 + i * 0.2);
+      
+      const gradient = this.ctx.createRadialGradient(x + offsetX, y + offsetY, 0, x + offsetX, y + offsetY, cloudSize/2);
+      gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.4)`);
+      gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+      
+      this.ctx.fillStyle = gradient;
+      this.ctx.beginPath();
+      this.ctx.arc(x + offsetX, y + offsetY, cloudSize/2, 0, Math.PI * 2);
+      this.ctx.fill();
+    }
+  }
+  
+  private drawMagmaBubble(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw glowing magma bubble
+    const gradient = this.ctx.createRadialGradient(x - size/4, y - size/4, 0, x, y, size/2);
+    gradient.addColorStop(0, `rgba(${rgb.r + 50}, ${rgb.g + 20}, 0, 1)`);
+    gradient.addColorStop(0.7, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.8)`);
+    gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+    
+    this.ctx.fillStyle = gradient;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, size/2, 0, Math.PI * 2);
+    this.ctx.fill();
+    
+    // Add highlight
+    this.ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+    this.ctx.beginPath();
+    this.ctx.arc(x - size/4, y - size/4, size/6, 0, Math.PI * 2);
+    this.ctx.fill();
+  }
+  
+  // Cyberpunk biome drawing functions
+  private drawNeonSign(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw neon sign outline
+    this.ctx.strokeStyle = color;
+    this.ctx.lineWidth = 3;
+    this.ctx.shadowBlur = 10;
+    this.ctx.shadowColor = color;
+    
+    this.ctx.beginPath();
+    this.ctx.rect(x - size/2, y - size/4, size, size/2);
+    this.ctx.stroke();
+    
+    this.ctx.shadowBlur = 0;
+  }
+  
+  private drawHologram(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw holographic grid pattern
+    this.ctx.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.5)`;
+    this.ctx.lineWidth = 1;
+    
+    const gridSize = size / 4;
+    for (let i = -2; i <= 2; i++) {
+      this.ctx.beginPath();
+      this.ctx.moveTo(x + i * gridSize, y - size/2);
+      this.ctx.lineTo(x + i * gridSize, y + size/2);
+      this.ctx.stroke();
+      
+      this.ctx.beginPath();
+      this.ctx.moveTo(x - size/2, y + i * gridSize);
+      this.ctx.lineTo(x + size/2, y + i * gridSize);
+      this.ctx.stroke();
+    }
+  }
+  
+  private drawDigitalRain(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw falling digital characters
+    this.ctx.fillStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.6)`;
+    this.ctx.font = `${size/3}px monospace`;
+    const chars = ['0', '1', 'A', 'B', 'C'];
+    const char = chars[Math.floor((x + y) % chars.length)];
+    this.ctx.fillText(char, x - size/4, y);
+  }
+  
+  private drawGridLine(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    this.ctx.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.3)`;
+    this.ctx.lineWidth = 1;
+    this.ctx.beginPath();
+    this.ctx.moveTo(x - size/2, y);
+    this.ctx.lineTo(x + size/2, y);
+    this.ctx.stroke();
+  }
+  
+  // Candy Land biome drawing functions
+  private drawGumdrop(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    const gradient = this.ctx.createRadialGradient(x - size/4, y - size/4, 0, x, y, size/2);
+    gradient.addColorStop(0, `rgba(${rgb.r + 30}, ${rgb.g + 30}, ${rgb.b + 30}, 1)`);
+    gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.8)`);
+    
+    this.ctx.fillStyle = gradient;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, size/2, 0, Math.PI * 2);
+    this.ctx.fill();
+    
+    // Add highlight
+    this.ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+    this.ctx.beginPath();
+    this.ctx.arc(x - size/4, y - size/4, size/4, 0, Math.PI * 2);
+    this.ctx.fill();
+  }
+  
+  private drawLollipop(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    const stickLength = size * 0.3;
+    
+    // Draw stick
+    this.ctx.strokeStyle = `rgba(${Math.max(0, rgb.r - 50)}, ${Math.max(0, rgb.g - 50)}, ${Math.max(0, rgb.b - 50)}, 1)`;
+    this.ctx.lineWidth = size * 0.1;
+    this.ctx.beginPath();
+    this.ctx.moveTo(x, y + size/2);
+    this.ctx.lineTo(x, y + size/2 + stickLength);
+    this.ctx.stroke();
+    
+    // Draw candy
+    const gradient = this.ctx.createRadialGradient(x - size/4, y - size/4, 0, x, y, size/2);
+    gradient.addColorStop(0, `rgba(${rgb.r + 30}, ${rgb.g + 30}, ${rgb.b + 30}, 1)`);
+    gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.8)`);
+    
+    this.ctx.fillStyle = gradient;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, size/2, 0, Math.PI * 2);
+    this.ctx.fill();
+    
+    // Add spiral pattern
+    this.ctx.strokeStyle = `rgba(${rgb.r - 30}, ${rgb.g - 30}, ${rgb.b - 30}, 0.8)`;
+    this.ctx.lineWidth = 2;
+    this.ctx.beginPath();
+    for (let i = 0; i < 20; i++) {
+      const angle = i * 0.3;
+      const radius = (size/2) * (i / 20);
+      const px = x + Math.cos(angle) * radius;
+      const py = y + Math.sin(angle) * radius;
+      if (i === 0) this.ctx.moveTo(px, py);
+      else this.ctx.lineTo(px, py);
+    }
+    this.ctx.stroke();
+  }
+  
+  private drawCandyCane(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw striped candy cane
+    this.ctx.strokeStyle = color;
+    this.ctx.lineWidth = size * 0.15;
+    this.ctx.lineCap = 'round';
+    
+    const stripeCount = 4;
+    for (let i = 0; i < stripeCount; i++) {
+      const offset = (i % 2 === 0) ? 0 : size * 0.1;
+      this.ctx.strokeStyle = (i % 2 === 0) ? color : '#ffffff';
+      this.ctx.beginPath();
+      this.ctx.moveTo(x - size/2 + offset, y - size/2 + i * size/stripeCount);
+      this.ctx.lineTo(x + size/2 - offset, y - size/2 + (i + 1) * size/stripeCount);
+      this.ctx.stroke();
+    }
+  }
+  
+  private drawSprinkle(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    this.ctx.fillStyle = color;
+    this.ctx.fillRect(x - size/4, y - size/2, size/2, size);
+  }
+  
+  // Underwater Cave / Crystal Cavern biome drawing functions
+  private drawBioluminescence(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, size/2);
+    gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 1)`);
+    gradient.addColorStop(0.5, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.6)`);
+    gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+    
+    this.ctx.fillStyle = gradient;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, size/2, 0, Math.PI * 2);
+    this.ctx.fill();
+  }
+  
+  private drawStalactite(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    this.ctx.fillStyle = color;
+    this.ctx.beginPath();
+    this.ctx.moveTo(x - size/2, y - size/2);
+    this.ctx.lineTo(x, y + size/2);
+    this.ctx.lineTo(x + size/2, y - size/2);
+    this.ctx.closePath();
+    this.ctx.fill();
+  }
+  
+  private drawGemstone(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw faceted gem
+    const gradient = this.ctx.createLinearGradient(x - size/2, y - size/2, x + size/2, y + size/2);
+    gradient.addColorStop(0, `rgba(${rgb.r + 50}, ${rgb.g + 50}, ${rgb.b + 50}, 1)`);
+    gradient.addColorStop(0.5, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.8)`);
+    gradient.addColorStop(1, `rgba(${Math.max(0, rgb.r - 30)}, ${Math.max(0, rgb.g - 30)}, ${Math.max(0, rgb.b - 30)}, 1)`);
+    
+    this.ctx.fillStyle = gradient;
+    this.ctx.beginPath();
+    // Draw diamond shape
+    this.ctx.moveTo(x, y - size/2);
+    this.ctx.lineTo(x + size/2, y);
+    this.ctx.lineTo(x, y + size/2);
+    this.ctx.lineTo(x - size/2, y);
+    this.ctx.closePath();
+    this.ctx.fill();
+    
+    // Add highlight
+    this.ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+    this.ctx.beginPath();
+    this.ctx.moveTo(x, y - size/2);
+    this.ctx.lineTo(x + size/4, y - size/4);
+    this.ctx.lineTo(x, y);
+    this.ctx.closePath();
+    this.ctx.fill();
+  }
+  
+  private drawLightRefraction(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw light rays
+    this.drawLightRays(x, y, size, color, 6);
+  }
+  
+  private drawCrystalFormation(x: number, y: number, size: number, color: string, variant: number): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw cluster of crystals
+    const crystalCount = 3 + variant;
+    for (let i = 0; i < crystalCount; i++) {
+      const angle = (i / crystalCount) * Math.PI * 2;
+      const offsetX = Math.cos(angle) * size/3;
+      const offsetY = Math.sin(angle) * size/3;
+      const crystalSize = size * (0.3 + (i % 2) * 0.2);
+      
+      this.ctx.fillStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.7)`;
+      this.ctx.beginPath();
+      this.ctx.moveTo(x + offsetX, y + offsetY - crystalSize/2);
+      this.ctx.lineTo(x + offsetX + crystalSize/3, y + offsetY + crystalSize/2);
+      this.ctx.lineTo(x + offsetX - crystalSize/3, y + offsetY + crystalSize/2);
+      this.ctx.closePath();
+      this.ctx.fill();
+    }
+  }
+  
+  // Mushroom Forest biome drawing functions
+  private drawMushroom(x: number, y: number, size: number, color: string, variant: number): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    const baseY = y + size/2;
+    const capSize = size * 0.7;
+    const stemHeight = size * 0.4;
+    const stemWidth = size * 0.15;
+    
+    // Draw stem
+    this.ctx.fillStyle = `rgba(${Math.max(0, rgb.r - 40)}, ${Math.max(0, rgb.g - 40)}, ${Math.max(0, rgb.b - 40)}, 1)`;
+    this.ctx.fillRect(x - stemWidth/2, baseY - stemHeight, stemWidth, stemHeight);
+    
+    // Draw cap
+    const capGradient = this.ctx.createRadialGradient(x, baseY - stemHeight, 0, x, baseY - stemHeight, capSize/2);
+    capGradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 1)`);
+    capGradient.addColorStop(1, `rgba(${Math.max(0, rgb.r - 30)}, ${Math.max(0, rgb.g - 30)}, ${Math.max(0, rgb.b - 30)}, 1)`);
+    
+    this.ctx.fillStyle = capGradient;
+    this.ctx.beginPath();
+    this.ctx.arc(x, baseY - stemHeight, capSize/2, 0, Math.PI * 2);
+    this.ctx.fill();
+    
+    // Add spots if variant > 0
+    if (variant > 0) {
+      this.ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+      this.ctx.beginPath();
+      this.ctx.arc(x - capSize/4, baseY - stemHeight - capSize/4, capSize/8, 0, Math.PI * 2);
+      this.ctx.fill();
+      this.ctx.beginPath();
+      this.ctx.arc(x + capSize/4, baseY - stemHeight - capSize/6, capSize/10, 0, Math.PI * 2);
+      this.ctx.fill();
+    }
+  }
+  
+  private drawSpore(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, size/2);
+    gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.6)`);
+    gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+    
+    this.ctx.fillStyle = gradient;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, size/2, 0, Math.PI * 2);
+    this.ctx.fill();
+  }
+  
+  private drawGlowingCap(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, size/2);
+    gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 1)`);
+    gradient.addColorStop(0.5, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.8)`);
+    gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+    
+    this.ctx.fillStyle = gradient;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, size/2, 0, Math.PI * 2);
+    this.ctx.fill();
+  }
+  
+  private drawMycelium(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    this.ctx.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.6)`;
+    this.ctx.lineWidth = 2;
+    
+    // Draw branching network
+    for (let i = 0; i < 3; i++) {
+      const angle = (i / 3) * Math.PI * 2;
+      this.ctx.beginPath();
+      this.ctx.moveTo(x, y);
+      this.ctx.lineTo(x + Math.cos(angle) * size/2, y + Math.sin(angle) * size/2);
+      this.ctx.stroke();
+    }
+  }
+  
+  // Cloud Kingdom biome drawing functions
+  private drawRainbow(x: number, y: number, size: number): void {
+    const colors = ['#ff0000', '#ff7f00', '#ffff00', '#00ff00', '#0000ff', '#4b0082', '#9400d3'];
+    const arcWidth = size * 0.1;
+    
+    for (let i = 0; i < colors.length; i++) {
+      this.ctx.strokeStyle = colors[i];
+      this.ctx.lineWidth = arcWidth;
+      this.ctx.beginPath();
+      this.ctx.arc(x, y, size/2 - i * arcWidth, 0, Math.PI);
+      this.ctx.stroke();
+    }
+  }
+  
+  private drawLightning(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    this.ctx.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 1)`;
+    this.ctx.lineWidth = 3;
+    this.ctx.shadowBlur = 10;
+    this.ctx.shadowColor = color;
+    
+    // Draw zigzag lightning
+    this.ctx.beginPath();
+    this.ctx.moveTo(x, y - size/2);
+    this.ctx.lineTo(x + size/4, y - size/4);
+    this.ctx.lineTo(x - size/4, y);
+    this.ctx.lineTo(x + size/4, y + size/4);
+    this.ctx.lineTo(x, y + size/2);
+    this.ctx.stroke();
+    
+    this.ctx.shadowBlur = 0;
+  }
+  
+  private drawSkyPalace(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw floating palace structure
+    const width = size * 0.6;
+    const height = size * 0.8;
+    const baseY = y + size/2;
+    
+    // Draw base
+    this.ctx.fillStyle = color;
+    this.ctx.fillRect(x - width/2, baseY - height, width, height);
+    
+    // Draw towers
+    const towerWidth = width/4;
+    this.ctx.fillRect(x - width/2, baseY - height * 1.2, towerWidth, height * 0.4);
+    this.ctx.fillRect(x + width/2 - towerWidth, baseY - height * 1.2, towerWidth, height * 0.4);
+  }
+  
+  // Neon City biome drawing functions
+  private drawSkyscraper(x: number, y: number, size: number, color: string, variant: number): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    const width = size * 0.4;
+    const height = size * (0.8 + variant * 0.2);
+    const baseY = y + size/2;
+    
+    // Draw building
+    this.ctx.fillStyle = color;
+    this.ctx.fillRect(x - width/2, baseY - height, width, height);
+    
+    // Add neon windows
+    this.ctx.fillStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.8)`;
+    const windowRows = 5 + variant;
+    const windowCols = 2;
+    const windowSize = width / (windowCols * 3);
+    const windowSpacing = width / windowCols;
+    
+    for (let row = 0; row < windowRows; row++) {
+      for (let col = 0; col < windowCols; col++) {
+        const windowX = x - width/2 + (col + 0.5) * windowSpacing;
+        const windowY = baseY - height + (row + 0.5) * (height / windowRows);
+        this.ctx.fillRect(windowX - windowSize/2, windowY - windowSize/2, windowSize, windowSize);
+      }
+    }
+  }
+  
+  private drawTrafficLight(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw traffic light pole
+    this.ctx.fillStyle = `rgba(${Math.max(0, rgb.r - 50)}, ${Math.max(0, rgb.g - 50)}, ${Math.max(0, rgb.b - 50)}, 1)`;
+    this.ctx.fillRect(x - size/8, y + size/4, size/4, size/2);
+    
+    // Draw lights
+    const lightSize = size/3;
+    const colors = ['#ff0000', '#ffff00', '#00ff00'];
+    for (let i = 0; i < 3; i++) {
+      this.ctx.fillStyle = colors[i];
+      this.ctx.beginPath();
+      this.ctx.arc(x, y - size/4 + i * lightSize, lightSize/2, 0, Math.PI * 2);
+      this.ctx.fill();
+    }
+  }
+  
+  private drawBillboard(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    const width = size * 0.8;
+    const height = size * 0.4;
+    
+    // Draw billboard
+    this.ctx.fillStyle = color;
+    this.ctx.fillRect(x - width/2, y - height/2, width, height);
+    
+    // Add text-like pattern
+    this.ctx.fillStyle = `rgba(${rgb.r + 50}, ${rgb.g + 50}, ${rgb.b + 50}, 1)`;
+    this.ctx.font = `${size/4}px sans-serif`;
+    this.ctx.fillText('★', x - width/4, y);
+  }
+  
+  // Jungle biome drawing functions
+  private drawVine(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    this.ctx.strokeStyle = color;
+    this.ctx.lineWidth = size * 0.1;
+    this.ctx.lineCap = 'round';
+    
+    // Draw curving vine
+    this.ctx.beginPath();
+    this.ctx.moveTo(x, y - size/2);
+    for (let i = 0; i < 5; i++) {
+      const waveX = x + Math.sin(i * 0.5) * size/4;
+      const waveY = y - size/2 + (i / 4) * size;
+      this.ctx.lineTo(waveX, waveY);
+    }
+    this.ctx.stroke();
+  }
+  
+  private drawTropicalFlower(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw flower petals
+    const petalCount = 5;
+    for (let i = 0; i < petalCount; i++) {
+      const angle = (i / petalCount) * Math.PI * 2;
+      const petalX = x + Math.cos(angle) * size/3;
+      const petalY = y + Math.sin(angle) * size/3;
+      
+      const gradient = this.ctx.createRadialGradient(petalX, petalY, 0, petalX, petalY, size/4);
+      gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 1)`);
+      gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+      
+      this.ctx.fillStyle = gradient;
+      this.ctx.beginPath();
+      this.ctx.arc(petalX, petalY, size/4, 0, Math.PI * 2);
+      this.ctx.fill();
+    }
+    
+    // Draw center
+    this.ctx.fillStyle = `rgba(${rgb.r + 50}, ${rgb.g + 50}, 0, 1)`;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, size/6, 0, Math.PI * 2);
+    this.ctx.fill();
+  }
+  
+  private drawWaterfall(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw flowing water
+    const gradient = this.ctx.createLinearGradient(x, y - size/2, x, y + size/2);
+    gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.8)`);
+    gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.4)`);
+    
+    this.ctx.fillStyle = gradient;
+    this.ctx.fillRect(x - size/4, y - size/2, size/2, size);
+    
+    // Add white foam
+    this.ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+    for (let i = 0; i < 3; i++) {
+      const foamY = y - size/2 + (i / 2) * size;
+      this.ctx.beginPath();
+      this.ctx.arc(x, foamY, size/8, 0, Math.PI * 2);
+      this.ctx.fill();
+    }
+  }
+  
+  private drawExoticBird(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw bird body
+    this.ctx.fillStyle = color;
+    this.ctx.beginPath();
+    this.ctx.ellipse(x, y, size * 0.3, size * 0.2, 0, 0, Math.PI * 2);
+    this.ctx.fill();
+    
+    // Draw tail feathers
+    this.ctx.beginPath();
+    this.ctx.moveTo(x - size * 0.3, y);
+    this.ctx.lineTo(x - size * 0.5, y - size * 0.2);
+    this.ctx.lineTo(x - size * 0.5, y + size * 0.2);
+    this.ctx.closePath();
+    this.ctx.fill();
+  }
+  
+  // Graveyard biome drawing functions
+  private drawTombstone(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    const baseY = y + size/2;
+    const width = size * 0.4;
+    const height = size * 0.6;
+    
+    // Draw tombstone
+    this.ctx.fillStyle = color;
+    this.ctx.fillRect(x - width/2, baseY - height, width, height);
+    
+    // Draw top arch
+    this.ctx.beginPath();
+    this.ctx.arc(x, baseY - height, width/2, Math.PI, 0, false);
+    this.ctx.fill();
+    
+    // Add cross or R.I.P. pattern
+    this.ctx.strokeStyle = `rgba(${Math.max(0, rgb.r - 30)}, ${Math.max(0, rgb.g - 30)}, ${Math.max(0, rgb.b - 30)}, 1)`;
+    this.ctx.lineWidth = 2;
+    this.ctx.beginPath();
+    this.ctx.moveTo(x, baseY - height * 0.7);
+    this.ctx.lineTo(x, baseY - height * 0.3);
+    this.ctx.stroke();
+    this.ctx.beginPath();
+    this.ctx.moveTo(x - width/4, baseY - height * 0.5);
+    this.ctx.lineTo(x + width/4, baseY - height * 0.5);
+    this.ctx.stroke();
+  }
+  
+  private drawMist(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw wispy mist
+    for (let i = 0; i < 4; i++) {
+      const offsetX = (i - 1.5) * size/4;
+      const cloudSize = size * (0.3 + i * 0.1);
+      
+      const gradient = this.ctx.createRadialGradient(x + offsetX, y, 0, x + offsetX, y, cloudSize/2);
+      gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.4)`);
+      gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+      
+      this.ctx.fillStyle = gradient;
+      this.ctx.beginPath();
+      this.ctx.arc(x + offsetX, y, cloudSize/2, 0, Math.PI * 2);
+      this.ctx.fill();
+    }
+  }
+  
+  private drawGhost(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw ghost shape
+    this.ctx.fillStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.7)`;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y - size/3, size/3, Math.PI, 0, false);
+    this.ctx.lineTo(x + size/3, y + size/2);
+    this.ctx.lineTo(x + size/6, y + size/3);
+    this.ctx.lineTo(x, y + size/2);
+    this.ctx.lineTo(x - size/6, y + size/3);
+    this.ctx.lineTo(x - size/3, y + size/2);
+    this.ctx.closePath();
+    this.ctx.fill();
+    
+    // Add eyes
+    this.ctx.fillStyle = '#000000';
+    this.ctx.beginPath();
+    this.ctx.arc(x - size/6, y - size/4, size/12, 0, Math.PI * 2);
+    this.ctx.fill();
+    this.ctx.beginPath();
+    this.ctx.arc(x + size/6, y - size/4, size/12, 0, Math.PI * 2);
+    this.ctx.fill();
+  }
+  
+  private drawMoonlight(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw moon
+    const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, size/2);
+    gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 1)`);
+    gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+    
+    this.ctx.fillStyle = gradient;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, size/2, 0, Math.PI * 2);
+    this.ctx.fill();
+    
+    // Add light rays
+    this.drawLightRays(x, y, size, color, 12);
+  }
+  
+  // Ocean Depths biome drawing functions
+  private drawDeepSeaCreature(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw jellyfish-like creature
+    const gradient = this.ctx.createRadialGradient(x, y - size/3, 0, x, y - size/3, size/2);
+    gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.8)`);
+    gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+    
+    this.ctx.fillStyle = gradient;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y - size/3, size/2, 0, Math.PI * 2);
+    this.ctx.fill();
+    
+    // Draw tentacles
+    this.ctx.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.6)`;
+    this.ctx.lineWidth = 2;
+    for (let i = 0; i < 4; i++) {
+      const angle = (i / 4) * Math.PI * 2;
+      this.ctx.beginPath();
+      this.ctx.moveTo(x + Math.cos(angle) * size/3, y);
+      this.ctx.quadraticCurveTo(
+        x + Math.cos(angle) * size/2, y + size/2,
+        x + Math.cos(angle) * size/2, y + size
+      );
+      this.ctx.stroke();
+    }
+  }
+  
+  private drawKelpForest(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw kelp strands
+    this.ctx.strokeStyle = color;
+    this.ctx.lineWidth = size * 0.1;
+    this.ctx.lineCap = 'round';
+    
+    for (let i = 0; i < 3; i++) {
+      const offsetX = (i - 1) * size/4;
+      this.ctx.beginPath();
+      this.ctx.moveTo(x + offsetX, y + size/2);
+      for (let j = 0; j < 5; j++) {
+        const waveX = x + offsetX + Math.sin(j * 0.3) * size/6;
+        const waveY = y + size/2 - (j / 4) * size;
+        this.ctx.lineTo(waveX, waveY);
+      }
+      this.ctx.stroke();
+    }
+  }
+  
+  private drawBioluminescentFish(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw glowing fish
+    this.ctx.fillStyle = color;
+    this.ctx.beginPath();
+    this.ctx.ellipse(x, y, size * 0.4, size * 0.2, 0, 0, Math.PI * 2);
+    this.ctx.fill();
+    
+    // Add glowing spots
+    this.ctx.fillStyle = `rgba(${rgb.r + 50}, ${rgb.g + 50}, ${rgb.b + 50}, 1)`;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, size/8, 0, Math.PI * 2);
+    this.ctx.fill();
+  }
+  
+  // Sunset Beach biome drawing functions
+  private drawPalmTree(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    const baseY = y + size/2;
+    
+    // Draw trunk
+    this.ctx.fillStyle = `rgba(${Math.max(0, rgb.r - 40)}, ${Math.max(0, rgb.g - 40)}, ${Math.max(0, rgb.b - 40)}, 1)`;
+    this.ctx.fillRect(x - size * 0.05, baseY - size * 0.5, size * 0.1, size * 0.5);
+    
+    // Draw fronds
+    this.ctx.strokeStyle = color;
+    this.ctx.lineWidth = size * 0.05;
+    for (let i = 0; i < 6; i++) {
+      const angle = (i / 6) * Math.PI * 2;
+      this.ctx.beginPath();
+      this.ctx.moveTo(x, baseY - size * 0.5);
+      this.ctx.lineTo(x + Math.cos(angle) * size/2, baseY - size * 0.5 + Math.sin(angle) * size/2);
+      this.ctx.stroke();
+    }
+  }
+  
+  private drawWave(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw wave
+    const gradient = this.ctx.createLinearGradient(x - size/2, y, x + size/2, y);
+    gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.6)`);
+    gradient.addColorStop(0.5, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.8)`);
+    gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.6)`);
+    
+    this.ctx.fillStyle = gradient;
+    this.ctx.beginPath();
+    this.ctx.moveTo(x - size/2, y);
+    this.ctx.quadraticCurveTo(x, y - size/3, x + size/2, y);
+    this.ctx.lineTo(x + size/2, y + size/4);
+    this.ctx.quadraticCurveTo(x, y + size/4 - size/6, x - size/2, y + size/4);
+    this.ctx.closePath();
+    this.ctx.fill();
+  }
+  
+  private drawSeagull(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw seagull silhouette
+    this.ctx.fillStyle = color;
+    this.ctx.beginPath();
+    // Body
+    this.ctx.ellipse(x, y, size * 0.3, size * 0.15, 0, 0, Math.PI * 2);
+    // Wings
+    this.ctx.moveTo(x - size * 0.2, y);
+    this.ctx.lineTo(x - size * 0.4, y - size * 0.2);
+    this.ctx.lineTo(x - size * 0.3, y);
+    this.ctx.moveTo(x + size * 0.2, y);
+    this.ctx.lineTo(x + size * 0.4, y - size * 0.2);
+    this.ctx.lineTo(x + size * 0.3, y);
+    this.ctx.fill();
+  }
+  
+  private drawSunsetGradient(x: number, y: number, size: number): void {
+    // Draw sunset gradient band
+    const colors = ['#ff6b6b', '#ffa07a', '#ffd700', '#ff8c00', '#ff6347'];
+    const bandHeight = size / colors.length;
+    
+    for (let i = 0; i < colors.length; i++) {
+      const gradient = this.ctx.createLinearGradient(x - size/2, y - size/2 + i * bandHeight, x + size/2, y - size/2 + i * bandHeight);
+      gradient.addColorStop(0, colors[i]);
+      gradient.addColorStop(1, colors[i]);
+      
+      this.ctx.fillStyle = gradient;
+      this.ctx.fillRect(x - size/2, y - size/2 + i * bandHeight, size, bandHeight);
+    }
+  }
+  
+  // Magical Forest biome drawing functions
+  private drawFairyLight(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, size/2);
+    gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 1)`);
+    gradient.addColorStop(0.5, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.6)`);
+    gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+    
+    this.ctx.fillStyle = gradient;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, size/2, 0, Math.PI * 2);
+    this.ctx.fill();
+    
+    // Add sparkles
+    this.drawSparkles(x, y, 4, color);
+  }
+  
+  private drawEnchantedTree(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    const baseY = y + size/2;
+    
+    // Draw trunk with glow
+    this.ctx.fillStyle = `rgba(${Math.max(0, rgb.r - 40)}, ${Math.max(0, rgb.g - 40)}, ${Math.max(0, rgb.b - 40)}, 1)`;
+    this.ctx.fillRect(x - size * 0.1, baseY - size * 0.3, size * 0.2, size * 0.3);
+    
+    // Draw magical foliage with sparkles
+    this.ctx.fillStyle = color;
+    for (let i = 0; i < 4; i++) {
+      const angle = (i / 4) * Math.PI * 2;
+      const offsetX = Math.cos(angle) * size/3;
+      const offsetY = baseY - size * 0.5 + Math.sin(angle) * size/4;
+      
+      this.ctx.beginPath();
+      this.ctx.arc(x + offsetX, offsetY, size/4, 0, Math.PI * 2);
+      this.ctx.fill();
+      
+      // Add sparkles
+      this.drawSparkles(x + offsetX, offsetY, 2, color);
+    }
+  }
+  
+  private drawFirefly(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, size/2);
+    gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 1)`);
+    gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+    
+    this.ctx.fillStyle = gradient;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, size/2, 0, Math.PI * 2);
+    this.ctx.fill();
+  }
+  
+  private drawMagicOrb(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw magical orb with inner glow
+    const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, size/2);
+    gradient.addColorStop(0, `rgba(${rgb.r + 50}, ${rgb.g + 50}, ${rgb.b + 50}, 1)`);
+    gradient.addColorStop(0.5, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.8)`);
+    gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+    
+    this.ctx.fillStyle = gradient;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, size/2, 0, Math.PI * 2);
+    this.ctx.fill();
+    
+    // Add sparkles
+    this.drawSparkles(x, y, 6, color);
+  }
+  
+  // Industrial biome drawing functions
+  private drawGear(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw gear teeth
+    this.ctx.fillStyle = color;
+    const teeth = 8;
+    const outerRadius = size/2;
+    const innerRadius = size/3;
+    
+    this.ctx.beginPath();
+    for (let i = 0; i < teeth * 2; i++) {
+      const radius = i % 2 === 0 ? outerRadius : innerRadius;
+      const angle = (i / (teeth * 2)) * Math.PI * 2;
+      const px = x + Math.cos(angle) * radius;
+      const py = y + Math.sin(angle) * radius;
+      if (i === 0) this.ctx.moveTo(px, py);
+      else this.ctx.lineTo(px, py);
+    }
+    this.ctx.closePath();
+    this.ctx.fill();
+    
+    // Draw center hole
+    this.ctx.fillStyle = `rgba(${Math.max(0, rgb.r - 50)}, ${Math.max(0, rgb.g - 50)}, ${Math.max(0, rgb.b - 50)}, 1)`;
+    this.ctx.beginPath();
+    this.ctx.arc(x, y, size/4, 0, Math.PI * 2);
+    this.ctx.fill();
+  }
+  
+  private drawSteam(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw rising steam
+    for (let i = 0; i < 3; i++) {
+      const offsetX = (i - 1) * size/4;
+      const cloudSize = size * (0.3 + i * 0.1);
+      
+      const gradient = this.ctx.createRadialGradient(x + offsetX, y - i * size/3, 0, x + offsetX, y - i * size/3, cloudSize/2);
+      gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.5)`);
+      gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+      
+      this.ctx.fillStyle = gradient;
+      this.ctx.beginPath();
+      this.ctx.arc(x + offsetX, y - i * size/3, cloudSize/2, 0, Math.PI * 2);
+      this.ctx.fill();
+    }
+  }
+  
+  private drawFactory(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    const width = size * 0.6;
+    const height = size * 0.7;
+    const baseY = y + size/2;
+    
+    // Draw factory building
+    this.ctx.fillStyle = color;
+    this.ctx.fillRect(x - width/2, baseY - height, width, height);
+    
+    // Draw smokestacks
+    const stackWidth = width/6;
+    this.ctx.fillRect(x - width/2, baseY - height * 1.1, stackWidth, height * 0.2);
+    this.ctx.fillRect(x + width/2 - stackWidth, baseY - height * 1.1, stackWidth, height * 0.2);
+  }
+  
+  // Retro Arcade biome drawing functions
+  private drawPixelArt(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw pixelated shape
+    const pixelSize = size / 4;
+    this.ctx.fillStyle = color;
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) {
+        if ((i + j) % 2 === 0) {
+          this.ctx.fillRect(x - size/2 + i * pixelSize, y - size/2 + j * pixelSize, pixelSize, pixelSize);
+        }
+      }
+    }
+  }
+  
+  private drawEightBitPattern(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw 8-bit checkerboard pattern
+    const tileSize = size / 4;
+    this.ctx.fillStyle = color;
+    for (let i = 0; i < 4; i++) {
+      for (let j = 0; j < 4; j++) {
+        if ((i + j) % 2 === 0) {
+          this.ctx.fillRect(x - size/2 + i * tileSize, y - size/2 + j * tileSize, tileSize, tileSize);
+        }
+      }
+    }
+  }
+  
+  private drawArcade(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw arcade cabinet shape
+    const width = size * 0.5;
+    const height = size * 0.7;
+    const baseY = y + size/2;
+    
+    this.ctx.fillStyle = color;
+    this.ctx.fillRect(x - width/2, baseY - height, width, height);
+    
+    // Draw screen
+    this.ctx.fillStyle = `rgba(${rgb.r + 50}, ${rgb.g + 50}, ${rgb.b + 50}, 1)`;
+    this.ctx.fillRect(x - width/3, baseY - height * 0.7, width * 2/3, height * 0.4);
+  }
+  
+  private drawPixelStar(x: number, y: number, size: number, color: string): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Draw pixelated star
+    const pixelSize = size / 6;
+    this.ctx.fillStyle = color;
+    
+    // Center pixel
+    this.ctx.fillRect(x - pixelSize/2, y - pixelSize/2, pixelSize, pixelSize);
+    
+    // Arms
+    for (let i = 0; i < 4; i++) {
+      const angle = (i / 4) * Math.PI * 2;
+      const px = x + Math.cos(angle) * size/3;
+      const py = y + Math.sin(angle) * size/3;
+      this.ctx.fillRect(px - pixelSize/2, py - pixelSize/2, pixelSize, pixelSize);
+    }
+  }
+  
+  // Enhanced wall rendering helpers
+  private drawWallTexture(x: number, y: number, width: number, height: number, color: string, textureType: 'brick' | 'stone' | 'metal' | 'noise' = 'noise'): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    this.ctx.save();
+    
+    switch (textureType) {
+      case 'brick':
+        // Draw brick pattern
+        const brickWidth = width / 8;
+        const brickHeight = height / 4;
+        for (let row = 0; row < 4; row++) {
+          const offset = (row % 2 === 0) ? 0 : brickWidth / 2;
+          for (let col = 0; col < 8; col++) {
+            const brickX = x + offset + col * brickWidth;
+            const brickY = y + row * brickHeight;
+            
+            // Draw brick with slight variation
+            const variation = ((row * 8 + col) % 3) * 5;
+            this.ctx.fillStyle = `rgba(${Math.max(0, rgb.r - variation)}, ${Math.max(0, rgb.g - variation)}, ${Math.max(0, rgb.b - variation)}, 0.3)`;
+            this.ctx.fillRect(brickX, brickY, brickWidth - 1, brickHeight - 1);
+          }
+        }
+        break;
+        
+      case 'stone':
+        // Draw stone pattern with irregular shapes
+        const stoneSize = Math.min(width, height) / 6;
+        for (let i = 0; i < 12; i++) {
+          const stoneX = x + (i % 4) * stoneSize + (i % 2) * stoneSize / 2;
+          const stoneY = y + Math.floor(i / 4) * stoneSize;
+          const variation = (i % 5) * 8;
+          
+          this.ctx.fillStyle = `rgba(${Math.max(0, rgb.r - variation)}, ${Math.max(0, rgb.g - variation)}, ${Math.max(0, rgb.b - variation)}, 0.25)`;
+          this.ctx.beginPath();
+          this.ctx.arc(stoneX + stoneSize/2, stoneY + stoneSize/2, stoneSize/2, 0, Math.PI * 2);
+          this.ctx.fill();
+        }
+        break;
+        
+      case 'metal':
+        // Draw metallic rivets and lines
+        this.ctx.strokeStyle = `rgba(${Math.min(255, rgb.r + 30)}, ${Math.min(255, rgb.g + 30)}, ${Math.min(255, rgb.b + 30)}, 0.4)`;
+        this.ctx.lineWidth = 1;
+        
+        // Horizontal lines
+        for (let i = 1; i < 4; i++) {
+          this.ctx.beginPath();
+          this.ctx.moveTo(x, y + (height / 4) * i);
+          this.ctx.lineTo(x + width, y + (height / 4) * i);
+          this.ctx.stroke();
+        }
+        
+        // Rivets
+        this.ctx.fillStyle = `rgba(${Math.min(255, rgb.r + 40)}, ${Math.min(255, rgb.g + 40)}, ${Math.min(255, rgb.b + 40)}, 0.6)`;
+        for (let i = 0; i < 3; i++) {
+          for (let j = 0; j < 2; j++) {
+            const rivetX = x + (width / 3) * (i + 0.5);
+            const rivetY = y + (height / 3) * (j + 0.5);
+            this.ctx.beginPath();
+            this.ctx.arc(rivetX, rivetY, 3, 0, Math.PI * 2);
+            this.ctx.fill();
+          }
+        }
+        break;
+        
+      case 'noise':
+      default:
+        // Draw noise pattern
+        const noiseDensity = (width * height) / 100;
+        for (let i = 0; i < noiseDensity; i++) {
+          const noiseX = x + Math.random() * width;
+          const noiseY = y + Math.random() * height;
+          const variation = Math.random() * 20;
+          
+          this.ctx.fillStyle = `rgba(${Math.max(0, rgb.r - variation)}, ${Math.max(0, rgb.g - variation)}, ${Math.max(0, rgb.b - variation)}, 0.2)`;
+          this.ctx.fillRect(noiseX, noiseY, 2, 2);
+        }
+        break;
+    }
+    
+    this.ctx.restore();
+  }
+  
+  private drawBeveledEdge(x: number, y: number, width: number, height: number, color: string, bevelSize: number = 5): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    // Top bevel (lighter)
+    const topGradient = this.ctx.createLinearGradient(x, y, x, y + bevelSize);
+    topGradient.addColorStop(0, `rgba(${Math.min(255, rgb.r + 40)}, ${Math.min(255, rgb.g + 40)}, ${Math.min(255, rgb.b + 40)}, 0.8)`);
+    topGradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+    this.ctx.fillStyle = topGradient;
+    this.ctx.fillRect(x, y, width, bevelSize);
+    
+    // Left bevel (lighter)
+    const leftGradient = this.ctx.createLinearGradient(x, y, x + bevelSize, y);
+    leftGradient.addColorStop(0, `rgba(${Math.min(255, rgb.r + 40)}, ${Math.min(255, rgb.g + 40)}, ${Math.min(255, rgb.b + 40)}, 0.8)`);
+    leftGradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+    this.ctx.fillStyle = leftGradient;
+    this.ctx.fillRect(x, y, bevelSize, height);
+    
+    // Bottom bevel (darker)
+    const bottomGradient = this.ctx.createLinearGradient(x, y + height - bevelSize, x, y + height);
+    bottomGradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+    bottomGradient.addColorStop(1, `rgba(${Math.max(0, rgb.r - 40)}, ${Math.max(0, rgb.g - 40)}, ${Math.max(0, rgb.b - 40)}, 0.8)`);
+    this.ctx.fillStyle = bottomGradient;
+    this.ctx.fillRect(x, y + height - bevelSize, width, bevelSize);
+    
+    // Right bevel (darker)
+    const rightGradient = this.ctx.createLinearGradient(x + width - bevelSize, y, x + width, y);
+    rightGradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+    rightGradient.addColorStop(1, `rgba(${Math.max(0, rgb.r - 40)}, ${Math.max(0, rgb.g - 40)}, ${Math.max(0, rgb.b - 40)}, 0.8)`);
+    this.ctx.fillStyle = rightGradient;
+    this.ctx.fillRect(x + width - bevelSize, y, bevelSize, height);
+  }
+  
+  private drawAnimatedPattern(x: number, y: number, width: number, height: number, color: string, time: number, patternType: 'scrolling' | 'pulsing' | 'rotating' = 'scrolling'): void {
+    const rgb = this.hexToRgb(color);
+    if (!rgb) return;
+    
+    this.ctx.save();
+    
+    switch (patternType) {
+      case 'scrolling':
+        // Scrolling diagonal lines
+        this.ctx.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.3)`;
+        this.ctx.lineWidth = 2;
+        const scrollOffset = (time * 50) % 40;
+        for (let i = -2; i < Math.ceil(width / 40) + 2; i++) {
+          const lineX = x + i * 40 - scrollOffset;
+          this.ctx.beginPath();
+          this.ctx.moveTo(lineX, y);
+          this.ctx.lineTo(lineX + 20, y + height);
+          this.ctx.stroke();
+        }
+        break;
+        
+      case 'pulsing':
+        // Pulsing glow
+        const pulse = 0.5 + 0.5 * Math.sin(time * 3);
+        const pulseGradient = this.ctx.createRadialGradient(x + width/2, y + height/2, 0, x + width/2, y + height/2, Math.max(width, height) * pulse);
+        pulseGradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${0.3 * pulse})`);
+        pulseGradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`);
+        this.ctx.fillStyle = pulseGradient;
+        this.ctx.fillRect(x, y, width, height);
+        break;
+        
+      case 'rotating':
+        // Rotating pattern
+        this.ctx.translate(x + width/2, y + height/2);
+        this.ctx.rotate(time * 0.5);
+        this.ctx.strokeStyle = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.4)`;
+        this.ctx.lineWidth = 2;
+        for (let i = 0; i < 4; i++) {
+          const angle = (i / 4) * Math.PI * 2;
+          this.ctx.beginPath();
+          this.ctx.moveTo(0, 0);
+          this.ctx.lineTo(Math.cos(angle) * Math.max(width, height)/2, Math.sin(angle) * Math.max(width, height)/2);
+          this.ctx.stroke();
+        }
+        break;
+    }
+    
+    this.ctx.restore();
+  }
+  
   clear(): void {
     // Note: Camera offset is applied in Game.render(), so we don't apply it here
     // Just clear and draw background normally
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    
+    // Reset canvas state to prevent smearing from previous frames
+    // (transforms are applied after clear, so we don't reset those here)
+    this.ctx.globalAlpha = 1.0;
+    this.ctx.shadowBlur = 0;
+    this.ctx.shadowColor = 'transparent';
     
     // Special rendering for Level 1
     if (this.currentLevel === 1) {
@@ -1411,6 +3205,11 @@ export class Renderer {
       for (const element of layer.elements) {
         this.drawBackgroundElement(element, layer);
       }
+    }
+    
+    // Apply color grading overlay for biome atmosphere
+    if (this.currentLevel !== 1) {
+      this.applyColorGrading();
     }
   }
   
@@ -1626,6 +3425,12 @@ export class Renderer {
         topHeight
       );
       
+      // Add texture based on wall style
+      if (this.enableAdvancedEffects) {
+        const textureType = style === 'pipe' ? 'metal' : style === 'procedural' ? 'stone' : 'noise';
+        this.drawWallTexture(obstacle.position.x, topStartY, obstacle.width, topHeight, obstacleColor, textureType);
+      }
+      
       // Apply glassmorphism effect
       this.drawGlassmorphism(
         obstacle.position.x,
@@ -1636,6 +3441,11 @@ export class Renderer {
         0.25
       );
       
+      // Add beveled edges for 3D effect
+      if (this.enableAdvancedEffects) {
+        this.drawBeveledEdge(obstacle.position.x, topStartY, obstacle.width, topHeight, obstacleColor, 5);
+      }
+      
       // Add color bleed effect
       this.drawColorBleed(
         obstacle.position.x,
@@ -1645,6 +3455,12 @@ export class Renderer {
         obstacleColor,
         0.12
       );
+      
+      // Add animated pattern for moving walls
+      if (style === 'moving' && this.enableAdvancedEffects) {
+        const time = Date.now() / 1000;
+        this.drawAnimatedPattern(obstacle.position.x, topStartY, obstacle.width, topHeight, obstacleColor, time, 'scrolling');
+      }
       
       // Add highlight edge to top obstacle
       const topHighlightGradient = this.ctx.createLinearGradient(
@@ -1687,6 +3503,12 @@ export class Renderer {
         bottomHeight
       );
       
+      // Add texture based on wall style
+      if (this.enableAdvancedEffects) {
+        const textureType = style === 'pipe' ? 'metal' : style === 'procedural' ? 'stone' : 'noise';
+        this.drawWallTexture(obstacle.position.x, bottomStartY, obstacle.width, bottomHeight, obstacleColor, textureType);
+      }
+      
       // Apply glassmorphism effect
       this.drawGlassmorphism(
         obstacle.position.x,
@@ -1697,6 +3519,11 @@ export class Renderer {
         0.25
       );
       
+      // Add beveled edges for 3D effect
+      if (this.enableAdvancedEffects) {
+        this.drawBeveledEdge(obstacle.position.x, bottomStartY, obstacle.width, bottomHeight, obstacleColor, 5);
+      }
+      
       // Add color bleed effect
       this.drawColorBleed(
         obstacle.position.x,
@@ -1706,6 +3533,12 @@ export class Renderer {
         obstacleColor,
         0.12
       );
+      
+      // Add animated pattern for moving walls
+      if (style === 'moving' && this.enableAdvancedEffects) {
+        const time = Date.now() / 1000;
+        this.drawAnimatedPattern(obstacle.position.x, bottomStartY, obstacle.width, bottomHeight, obstacleColor, time, 'scrolling');
+      }
       
       // Add highlight edge to bottom obstacle
       const bottomHighlightGradient = this.ctx.createLinearGradient(
@@ -1727,17 +3560,26 @@ export class Renderer {
       // Draw special effects based on obstacle type and style
       // (style already declared above)
       
-      if (style === 'spike' || obstacle.obstacleType === 'spike') {
-        // Draw spikes on the edges of the gap
-        this.ctx.fillStyle = obstacleColor;
-        const spikeCount = Math.floor(obstacle.width / 15); // More spikes for wider walls
-        for (let i = 0; i < spikeCount; i++) {
-          // Distribute spikes evenly along the wall width, centered in each segment
-          const spikeX = obstacle.position.x + ((i + 0.5) / spikeCount) * obstacle.width;
-          this.drawSpike(spikeX, gapTop, 8, 12, 'up'); // Top spikes
-          this.drawSpike(spikeX, gapBottom, 8, 12, 'down'); // Bottom spikes
-        }
-      } else if (style === 'moving' || obstacle.obstacleType === 'moving') {
+      // Spikes removed from gaps as per user request
+      // if (style === 'spike' || obstacle.obstacleType === 'spike') {
+      //   // Draw spikes on the edges of the gap with enhanced glow
+      //   const spikeCount = Math.floor(obstacle.width / 15); // More spikes for wider walls
+      //   for (let i = 0; i < spikeCount; i++) {
+      //     // Distribute spikes evenly along the wall width, centered in each segment
+      //     const spikeX = obstacle.position.x + ((i + 0.5) / spikeCount) * obstacle.width;
+      //     
+      //     // Add glow to spike tips
+      //     if (this.enableAdvancedEffects) {
+      //       this.drawGlowAura(spikeX, gapTop, 12, obstacleColor, 'intense');
+      //       this.drawGlowAura(spikeX, gapBottom, 12, obstacleColor, 'intense');
+      //     }
+      //     
+      //     this.ctx.fillStyle = obstacleColor;
+      //     this.drawSpike(spikeX, gapTop, 8, 12, 'up'); // Top spikes
+      //     this.drawSpike(spikeX, gapBottom, 8, 12, 'down'); // Bottom spikes
+      //   }
+      // } else 
+      if (style === 'moving' || obstacle.obstacleType === 'moving') {
         // Add a visual indicator for moving obstacles (animated arrow pattern)
         this.ctx.fillStyle = '#fbbf24'; // amber-400
         const arrowCount = Math.floor(obstacle.width / 20);
@@ -1774,14 +3616,39 @@ export class Renderer {
       }
     } else {
       // Horizontal wall drawing - same logic as vertical but rotated
-      if (!obstacle.gapX || !obstacle.gapWidth) return;
-      
-      const gapLeft = obstacle.gapX - obstacle.gapWidth / 2;
-      const gapRight = obstacle.gapX + obstacle.gapWidth / 2;
-      
       // Horizontal walls span the entire canvas width (0 to canvas.width)
       const canvasLeft = 0;
       const canvasRight = this.canvas.width;
+      
+      // Handle walls without gaps (solid walls) - render as full wall
+      if (!obstacle.gapX || !obstacle.gapWidth || obstacle.gapWidth <= 0) {
+        // Render solid wall (no gap) - use the same color logic as walls with gaps
+        const solidGradient = this.ctx.createLinearGradient(
+          canvasLeft, obstacle.position.y,
+          canvasRight, obstacle.position.y
+        );
+        solidGradient.addColorStop(0, obstacleColor);
+        solidGradient.addColorStop(0.5, obstacleHighlight);
+        solidGradient.addColorStop(1, obstacleColor);
+        
+        this.ctx.save();
+        this.ctx.shadowBlur = 8;
+        this.ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+        this.ctx.shadowOffsetX = 3;
+        this.ctx.shadowOffsetY = 3;
+        this.ctx.fillStyle = solidGradient;
+        this.ctx.fillRect(
+          canvasLeft,
+          obstacle.position.y,
+          canvasRight - canvasLeft,
+          obstacle.height
+        );
+        this.ctx.restore();
+        return;
+      }
+      
+      const gapLeft = obstacle.gapX - obstacle.gapWidth / 2;
+      const gapRight = obstacle.gapX + obstacle.gapWidth / 2;
       
       // Determine glow intensity based on wall style
       const style = obstacle.wallStyle || obstacle.obstacleType;
@@ -2059,55 +3926,21 @@ export class Renderer {
   private drawHorizontalWall(obstacle: Obstacle): void {
     // Horizontal walls can be at any X position (they scroll)
     // Calculate visible portion of wall on screen
+    // Use visibility buffer like vertical walls (matching Game.ts viewportBuffer of 200px)
+    const VISIBILITY_BUFFER = 200;
     const wallLeft = obstacle.position.x;
     const wallRight = obstacle.position.x + obstacle.width;
     const canvasLeft = 0;
     const canvasRight = this.canvas.width;
     
-    // Only draw if wall is visible on screen
-    if (wallRight < canvasLeft || wallLeft > canvasRight) {
-      return; // Wall is off-screen
+    // Only draw if wall is visible on screen (with buffer for partially visible walls)
+    if (wallRight < canvasLeft - VISIBILITY_BUFFER || wallLeft > canvasRight + VISIBILITY_BUFFER) {
+      return; // Wall is completely off-screen
     }
     
     // Calculate visible portion
     const visibleLeft = Math.max(wallLeft, canvasLeft);
     const visibleRight = Math.min(wallRight, canvasRight);
-    
-    // Handle walls without gaps (solid walls) - render as full wall
-    // Only render as solid if gapWidth is 0 or gap doesn't exist
-    if (!obstacle.gapX || !obstacle.gapWidth || obstacle.gapWidth <= 0) {
-      // Render solid wall (no gap)
-      const wallColor = obstacle.wallColor || this.currentTheme.obstacleColor;
-      const seed = Math.floor(obstacle.position.x * 1000 + obstacle.position.y);
-      const wallHighlight = generateColorVariation(wallColor, seed);
-      
-      const solidGradient = this.ctx.createLinearGradient(
-        visibleLeft, obstacle.position.y,
-        visibleRight, obstacle.position.y
-      );
-      solidGradient.addColorStop(0, wallColor);
-      solidGradient.addColorStop(0.5, wallHighlight);
-      solidGradient.addColorStop(1, wallColor);
-      
-      this.ctx.save();
-      this.ctx.shadowBlur = 8;
-      this.ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
-      this.ctx.shadowOffsetX = 3;
-      this.ctx.shadowOffsetY = 3;
-      this.ctx.fillStyle = solidGradient;
-      this.ctx.fillRect(
-        visibleLeft,
-        obstacle.position.y,
-        visibleRight - visibleLeft,
-        obstacle.height
-      );
-      this.ctx.restore();
-      return;
-    }
-    
-    // Wall has a gap - render with gap
-    const gapLeft = obstacle.gapX - obstacle.gapWidth / 2;
-    const gapRight = obstacle.gapX + obstacle.gapWidth / 2;
     
     // Use wallColor from config if available, otherwise fall back to theme colors
     let obstacleColor: string;
@@ -2130,6 +3963,129 @@ export class Renderer {
       obstacleHighlight = generateColorVariation(baseObstacleHighlight, seed);
     }
     
+    // Determine glow intensity based on wall style
+    const style = obstacle.wallStyle || obstacle.obstacleType;
+    const glowIntensity = style === 'spike' ? 'intense' : style === 'procedural' ? 'soft' : 'soft';
+    
+    // Handle walls without gaps (solid walls) - render as full wall
+    // Only render as solid if gapWidth is 0 or gap doesn't exist
+    if (!obstacle.gapX || !obstacle.gapWidth || obstacle.gapWidth <= 0) {
+      // Render solid wall (no gap)
+      const solidGradient = this.ctx.createLinearGradient(
+        visibleLeft, obstacle.position.y,
+        visibleRight, obstacle.position.y
+      );
+      solidGradient.addColorStop(0, obstacleColor);
+      solidGradient.addColorStop(0.5, obstacleHighlight);
+      solidGradient.addColorStop(1, obstacleColor);
+      
+      // Draw outer glow aura around wall
+      if (this.enableAdvancedEffects) {
+        const wallCenterX = visibleLeft + (visibleRight - visibleLeft) / 2;
+        const glowSize = Math.min(visibleRight - visibleLeft, obstacle.height);
+        if (glowSize > 0) {
+          this.drawGlowAura(wallCenterX, obstacle.position.y, glowSize, obstacleColor, glowIntensity);
+          this.drawGlowAura(wallCenterX, obstacle.position.y + obstacle.height, glowSize, obstacleColor, glowIntensity);
+        }
+      }
+      
+      // Special glow effect for level transition gaps
+      if (obstacle.isLevelTransition) {
+        this.ctx.save();
+        this.ctx.shadowBlur = 20;
+        this.ctx.shadowColor = '#8b5cf6'; // purple glow
+        this.ctx.shadowOffsetX = 0;
+        this.ctx.shadowOffsetY = 0;
+      }
+      
+      this.ctx.save();
+      this.ctx.shadowBlur = 8;
+      this.ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+      this.ctx.shadowOffsetX = 3;
+      this.ctx.shadowOffsetY = 3;
+      this.ctx.fillStyle = solidGradient;
+      this.ctx.fillRect(
+        visibleLeft,
+        obstacle.position.y,
+        visibleRight - visibleLeft,
+        obstacle.height
+      );
+      
+      // Add texture based on wall style
+      if (this.enableAdvancedEffects) {
+        const textureType = style === 'pipe' ? 'metal' : style === 'procedural' ? 'stone' : 'noise';
+        this.drawWallTexture(visibleLeft, obstacle.position.y, visibleRight - visibleLeft, obstacle.height, obstacleColor, textureType);
+      }
+      
+      // Apply glassmorphism effect
+      this.drawGlassmorphism(
+        visibleLeft,
+        obstacle.position.y,
+        visibleRight - visibleLeft,
+        obstacle.height,
+        obstacleColor,
+        0.25
+      );
+      
+      // Add beveled edges for 3D effect
+      if (this.enableAdvancedEffects) {
+        this.drawBeveledEdge(visibleLeft, obstacle.position.y, visibleRight - visibleLeft, obstacle.height, obstacleColor, 5);
+      }
+      
+      // Add color bleed effect
+      this.drawColorBleed(
+        visibleLeft,
+        obstacle.position.y,
+        visibleRight - visibleLeft,
+        obstacle.height,
+        obstacleColor,
+        0.12
+      );
+      
+      // Add animated pattern for moving walls
+      if (style === 'moving' && this.enableAdvancedEffects) {
+        const time = Date.now() / 1000;
+        this.drawAnimatedPattern(visibleLeft, obstacle.position.y, visibleRight - visibleLeft, obstacle.height, obstacleColor, time, 'scrolling');
+      }
+      
+      this.ctx.restore();
+      
+      if (obstacle.isLevelTransition) {
+        this.ctx.restore();
+      }
+      return;
+    }
+    
+    // Wall has a gap - render with gap
+    const gapLeft = obstacle.gapX - obstacle.gapWidth / 2;
+    const gapRight = obstacle.gapX + obstacle.gapWidth / 2;
+    
+    // Draw outer glow aura around walls
+    if (this.enableAdvancedEffects) {
+      const leftWidth = Math.max(0, Math.min(gapLeft, visibleRight) - visibleLeft);
+      const rightWidth = Math.max(0, visibleRight - Math.max(gapRight, visibleLeft));
+      
+      // Glow for left wall - draw at edges
+      if (leftWidth > 0 && obstacle.height > 0) {
+        const leftCenterX = visibleLeft + leftWidth / 2;
+        const leftGlowSize = Math.min(leftWidth, obstacle.height);
+        if (leftGlowSize > 0) {
+          this.drawGlowAura(leftCenterX, obstacle.position.y, leftGlowSize, obstacleColor, glowIntensity);
+          this.drawGlowAura(leftCenterX, obstacle.position.y + obstacle.height, leftGlowSize, obstacleColor, glowIntensity);
+        }
+      }
+      
+      // Glow for right wall - draw at edges
+      if (rightWidth > 0 && obstacle.height > 0) {
+        const rightCenterX = Math.max(gapRight, visibleLeft) + rightWidth / 2;
+        const rightGlowSize = Math.min(rightWidth, obstacle.height);
+        if (rightGlowSize > 0) {
+          this.drawGlowAura(rightCenterX, obstacle.position.y, rightGlowSize, obstacleColor, glowIntensity);
+          this.drawGlowAura(rightCenterX, obstacle.position.y + obstacle.height, rightGlowSize, obstacleColor, glowIntensity);
+        }
+      }
+    }
+    
     // Special glow effect for level transition gaps
     if (obstacle.isLevelTransition) {
       this.ctx.save();
@@ -2139,7 +4095,7 @@ export class Renderer {
       this.ctx.shadowOffsetY = 0;
     }
     
-    // Draw shadow
+    // Draw shadow for left obstacle
     this.ctx.save();
     this.ctx.shadowBlur = 8;
     this.ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
@@ -2150,7 +4106,9 @@ export class Renderer {
     // Handle case where gap might be partially or fully off-screen
     const leftSegmentStart = visibleLeft;
     const leftSegmentEnd = Math.min(Math.max(gapLeft, visibleLeft), visibleRight);
-    if (leftSegmentEnd > leftSegmentStart && gapLeft > visibleLeft) {
+    const leftSegmentWidth = leftSegmentEnd - leftSegmentStart;
+    
+    if (leftSegmentWidth > 0 && gapLeft > visibleLeft) {
       const leftGradient = this.ctx.createLinearGradient(
         leftSegmentStart, obstacle.position.y,
         leftSegmentEnd, obstacle.position.y
@@ -2163,13 +4121,50 @@ export class Renderer {
       this.ctx.fillRect(
         leftSegmentStart,
         obstacle.position.y,
-        leftSegmentEnd - leftSegmentStart,
+        leftSegmentWidth,
         obstacle.height
       );
       
+      // Add texture based on wall style
+      if (this.enableAdvancedEffects) {
+        const textureType = style === 'pipe' ? 'metal' : style === 'procedural' ? 'stone' : 'noise';
+        this.drawWallTexture(leftSegmentStart, obstacle.position.y, leftSegmentWidth, obstacle.height, obstacleColor, textureType);
+      }
+      
+      // Apply glassmorphism effect
+      this.drawGlassmorphism(
+        leftSegmentStart,
+        obstacle.position.y,
+        leftSegmentWidth,
+        obstacle.height,
+        obstacleColor,
+        0.25
+      );
+      
+      // Add beveled edges for 3D effect
+      if (this.enableAdvancedEffects) {
+        this.drawBeveledEdge(leftSegmentStart, obstacle.position.y, leftSegmentWidth, obstacle.height, obstacleColor, 5);
+      }
+      
+      // Add color bleed effect
+      this.drawColorBleed(
+        leftSegmentStart,
+        obstacle.position.y,
+        leftSegmentWidth,
+        obstacle.height,
+        obstacleColor,
+        0.12
+      );
+      
+      // Add animated pattern for moving walls
+      if (style === 'moving' && this.enableAdvancedEffects) {
+        const time = Date.now() / 1000;
+        this.drawAnimatedPattern(leftSegmentStart, obstacle.position.y, leftSegmentWidth, obstacle.height, obstacleColor, time, 'scrolling');
+      }
+      
       // Add highlight edge on the left side (only if at wall's actual left edge)
       if (leftSegmentStart <= wallLeft + 5) {
-        const highlightWidth = Math.min(15, leftSegmentEnd - leftSegmentStart);
+        const highlightWidth = Math.min(15, leftSegmentWidth);
         if (highlightWidth > 0) {
           const leftHighlightGradient = this.ctx.createLinearGradient(
             leftSegmentStart, obstacle.position.y,
@@ -2188,11 +4183,22 @@ export class Renderer {
       }
     }
     
+    this.ctx.restore();
+    
+    // Draw shadow for right obstacle
+    this.ctx.save();
+    this.ctx.shadowBlur = 8;
+    this.ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+    this.ctx.shadowOffsetX = 3;
+    this.ctx.shadowOffsetY = 3;
+    
     // Draw right wall segment (from gap to visible right edge)
     // Handle case where gap might be partially or fully off-screen
     const rightSegmentStart = Math.max(Math.min(gapRight, visibleRight), visibleLeft);
     const rightSegmentEnd = visibleRight;
-    if (rightSegmentEnd > rightSegmentStart && gapRight < visibleRight) {
+    const rightSegmentWidth = rightSegmentEnd - rightSegmentStart;
+    
+    if (rightSegmentWidth > 0 && gapRight < visibleRight) {
       const rightGradient = this.ctx.createLinearGradient(
         rightSegmentStart, obstacle.position.y,
         rightSegmentEnd, obstacle.position.y
@@ -2205,13 +4211,50 @@ export class Renderer {
       this.ctx.fillRect(
         rightSegmentStart,
         obstacle.position.y,
-        rightSegmentEnd - rightSegmentStart,
+        rightSegmentWidth,
         obstacle.height
       );
       
+      // Add texture based on wall style
+      if (this.enableAdvancedEffects) {
+        const textureType = style === 'pipe' ? 'metal' : style === 'procedural' ? 'stone' : 'noise';
+        this.drawWallTexture(rightSegmentStart, obstacle.position.y, rightSegmentWidth, obstacle.height, obstacleColor, textureType);
+      }
+      
+      // Apply glassmorphism effect
+      this.drawGlassmorphism(
+        rightSegmentStart,
+        obstacle.position.y,
+        rightSegmentWidth,
+        obstacle.height,
+        obstacleColor,
+        0.25
+      );
+      
+      // Add beveled edges for 3D effect
+      if (this.enableAdvancedEffects) {
+        this.drawBeveledEdge(rightSegmentStart, obstacle.position.y, rightSegmentWidth, obstacle.height, obstacleColor, 5);
+      }
+      
+      // Add color bleed effect
+      this.drawColorBleed(
+        rightSegmentStart,
+        obstacle.position.y,
+        rightSegmentWidth,
+        obstacle.height,
+        obstacleColor,
+        0.12
+      );
+      
+      // Add animated pattern for moving walls
+      if (style === 'moving' && this.enableAdvancedEffects) {
+        const time = Date.now() / 1000;
+        this.drawAnimatedPattern(rightSegmentStart, obstacle.position.y, rightSegmentWidth, obstacle.height, obstacleColor, time, 'scrolling');
+      }
+      
       // Add highlight edge on the right side (only if at wall's actual right edge)
       if (rightSegmentEnd >= wallRight - 5) {
-        const highlightWidth = Math.min(15, rightSegmentEnd - rightSegmentStart);
+        const highlightWidth = Math.min(15, rightSegmentWidth);
         if (highlightWidth > 0) {
           const rightHighlightGradient = this.ctx.createLinearGradient(
             rightSegmentEnd - highlightWidth, obstacle.position.y,
@@ -2233,37 +4276,112 @@ export class Renderer {
     this.ctx.restore();
     
     // Draw special effects based on obstacle type and style
-    const style = obstacle.wallStyle || obstacle.obstacleType;
-    
     // Only draw gap decorations if gap is visible on screen
     if (gapRight >= visibleLeft && gapLeft <= visibleRight) {
-      if (style === 'spike' || obstacle.obstacleType === 'spike') {
-        // Draw spikes on the edges of the gap (only if visible)
-        this.ctx.fillStyle = obstacleColor;
-        const spikeCount = Math.floor(obstacle.height / 15);
-        for (let i = 0; i < spikeCount; i++) {
-          // Distribute spikes evenly along the wall height, centered in each segment
-          const spikeY = obstacle.position.y + ((i + 0.5) / spikeCount) * obstacle.height;
-          // Only draw spikes if they're in visible area
-          if (gapLeft >= visibleLeft && gapLeft <= visibleRight) {
-            this.drawSpike(gapLeft, spikeY, 8, 12, 'right'); // Left spikes (pointing right)
-          }
-          if (gapRight >= visibleLeft && gapRight <= visibleRight) {
-            this.drawSpike(gapRight, spikeY, 8, 12, 'left'); // Right spikes (pointing left)
+      // Spikes removed from gaps as per user request
+      // if (style === 'spike' || obstacle.obstacleType === 'spike') {
+      //   // Draw spikes on the edges of the gap (only if visible)
+      //   // For horizontal walls, spikes should be along the gap width (horizontal)
+      //   // Top wall: spikes on bottom edge pointing down
+      //   // Bottom wall: spikes on top edge pointing up
+      //   this.ctx.fillStyle = obstacleColor;
+      //   const gapTop = obstacle.position.y;
+      //   const gapBottom = obstacle.position.y + obstacle.height;
+      //   
+      //   // Determine if this is a top wall (near y=0) or bottom wall (near bottom of canvas)
+      //   const isTopWall = obstacle.position.y < this.canvas.height / 2;
+      //   
+      //   // Calculate visible gap bounds
+      //   const visibleGapLeft = Math.max(gapLeft, visibleLeft);
+      //   const visibleGapRight = Math.min(gapRight, visibleRight);
+      //   const visibleGapWidth = visibleGapRight - visibleGapLeft;
+      //   
+      //   // Distribute spikes evenly along the gap width (horizontal direction)
+      //   const spikeCount = Math.floor(visibleGapWidth / 15);
+      //   for (let i = 0; i < spikeCount; i++) {
+      //     // Distribute spikes evenly along the visible gap width, centered in each segment
+      //     const spikeX = visibleGapLeft + ((i + 0.5) / spikeCount) * visibleGapWidth;
+      //     
+      //     // Add glow to spike tips
+      //     if (this.enableAdvancedEffects) {
+      //       if (isTopWall) {
+      //         this.drawGlowAura(spikeX, gapBottom, 12, obstacleColor, 'intense');
+      //       } else {
+      //         this.drawGlowAura(spikeX, gapTop, 12, obstacleColor, 'intense');
+      //       }
+      //     }
+      //     
+      //     // Top wall: spikes on bottom edge pointing down
+      //     // Bottom wall: spikes on top edge pointing up
+      //     if (isTopWall) {
+      //       // Top wall - spikes on bottom edge pointing down into gap
+      //       this.drawSpike(spikeX, gapBottom, 8, 12, 'down');
+      //     } else {
+      //       // Bottom wall - spikes on top edge pointing up into gap
+      //       this.drawSpike(spikeX, gapTop, 8, 12, 'up');
+      //     }
+      //   }
+      // } else 
+      if (style === 'moving' || obstacle.obstacleType === 'moving') {
+        // Add visual indicator for moving obstacles
+        // For horizontal walls, arrows should be along the gap width (horizontal)
+        this.ctx.fillStyle = '#fbbf24'; // amber-400
+        const gapTop = obstacle.position.y;
+        const gapBottom = obstacle.position.y + obstacle.height;
+        
+        // Determine if this is a top wall or bottom wall
+        const isTopWall = obstacle.position.y < this.canvas.height / 2;
+        
+        // Calculate visible gap bounds
+        const visibleGapLeft = Math.max(gapLeft, visibleLeft);
+        const visibleGapRight = Math.min(gapRight, visibleRight);
+        const visibleGapWidth = visibleGapRight - visibleGapLeft;
+        
+        // Distribute arrows evenly along the gap width (horizontal direction)
+        const arrowCount = Math.floor(visibleGapWidth / 20);
+        for (let i = 0; i < arrowCount; i++) {
+          const arrowX = visibleGapLeft + (i / arrowCount) * visibleGapWidth;
+          
+          // Top wall: arrows on bottom edge pointing down
+          // Bottom wall: arrows on top edge pointing up
+          if (isTopWall) {
+            this.drawArrow(arrowX, gapBottom + 10, 6, 'down'); // Bottom arrows pointing down
+          } else {
+            this.drawArrow(arrowX, gapTop - 10, 6, 'up'); // Top arrows pointing up
           }
         }
-      } else if (style === 'moving' || obstacle.obstacleType === 'moving') {
-        // Add visual indicator for moving obstacles
-        this.ctx.fillStyle = '#fbbf24'; // amber-400
-        const arrowCount = Math.floor(obstacle.height / 20);
-        for (let i = 0; i < arrowCount; i++) {
-          const arrowY = obstacle.position.y + (i / arrowCount) * obstacle.height;
-          // Only draw arrows if they're in visible area
-          if (gapLeft - 10 >= visibleLeft && gapLeft - 10 <= visibleRight) {
-            this.drawArrow(gapLeft - 10, arrowY, 6, 'left'); // Left arrows
+      } else if (style === 'procedural') {
+        // Draw procedural pattern (random dots/texture)
+        this.ctx.fillStyle = obstacleHighlight;
+        const leftSegmentWidth = Math.max(0, Math.min(gapLeft, visibleRight) - visibleLeft);
+        const rightSegmentWidth = Math.max(0, visibleRight - Math.max(gapRight, visibleLeft));
+        
+        // Draw on left segment
+        if (leftSegmentWidth > 0) {
+          const patternDensity = Math.floor((leftSegmentWidth * obstacle.height) / 400);
+          const seed = Math.floor(obstacle.position.x * 1000 + obstacle.position.y);
+          for (let i = 0; i < patternDensity; i++) {
+            // Seeded random for consistency
+            const random = ((seed + i * 9301) % 233280) / 233280;
+            const dotX = leftSegmentStart + (random * leftSegmentWidth);
+            const dotY = obstacle.position.y + (random * obstacle.height);
+            this.ctx.beginPath();
+            this.ctx.arc(dotX, dotY, 2, 0, Math.PI * 2);
+            this.ctx.fill();
           }
-          if (gapRight + 10 >= visibleLeft && gapRight + 10 <= visibleRight) {
-            this.drawArrow(gapRight + 10, arrowY, 6, 'right'); // Right arrows
+        }
+        
+        // Draw on right segment
+        if (rightSegmentWidth > 0) {
+          const rightPatternDensity = Math.floor((rightSegmentWidth * obstacle.height) / 400);
+          const seed = Math.floor(obstacle.position.x * 1000 + obstacle.position.y);
+          for (let i = 0; i < rightPatternDensity; i++) {
+            const random = ((seed + (i + rightPatternDensity) * 9301) % 233280) / 233280;
+            const dotX = rightSegmentStart + (random * rightSegmentWidth);
+            const dotY = obstacle.position.y + (random * obstacle.height);
+            this.ctx.beginPath();
+            this.ctx.arc(dotX, dotY, 2, 0, Math.PI * 2);
+            this.ctx.fill();
           }
         }
       }
@@ -2765,6 +4883,160 @@ export class Renderer {
     this.ctx.restore();
   }
   
+  drawStyleMeter(level: string, points: number, progress: number, color: string): void {
+    const meterX = this.canvas.width - 120;
+    const meterY = 50;
+    const meterWidth = 100;
+    const meterHeight = 20;
+    const radius = 10;
+    
+    // Draw background
+    this.ctx.save();
+    this.ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+    this.ctx.beginPath();
+    this.ctx.moveTo(meterX + radius, meterY);
+    this.ctx.lineTo(meterX + meterWidth - radius, meterY);
+    this.ctx.quadraticCurveTo(meterX + meterWidth, meterY, meterX + meterWidth, meterY + radius);
+    this.ctx.lineTo(meterX + meterWidth, meterY + meterHeight - radius);
+    this.ctx.quadraticCurveTo(meterX + meterWidth, meterY + meterHeight, meterX + meterWidth - radius, meterY + meterHeight);
+    this.ctx.lineTo(meterX + radius, meterY + meterHeight);
+    this.ctx.quadraticCurveTo(meterX, meterY + meterHeight, meterX, meterY + meterHeight - radius);
+    this.ctx.lineTo(meterX, meterY + radius);
+    this.ctx.quadraticCurveTo(meterX, meterY, meterX + radius, meterY);
+    this.ctx.closePath();
+    this.ctx.fill();
+    
+    // Draw progress bar
+    if (progress > 0) {
+      const progressWidth = meterWidth * progress;
+      this.ctx.fillStyle = color;
+      this.ctx.beginPath();
+      if (progressWidth >= meterWidth) {
+        this.ctx.moveTo(meterX + radius, meterY);
+        this.ctx.lineTo(meterX + meterWidth - radius, meterY);
+        this.ctx.quadraticCurveTo(meterX + meterWidth, meterY, meterX + meterWidth, meterY + radius);
+        this.ctx.lineTo(meterX + meterWidth, meterY + meterHeight - radius);
+        this.ctx.quadraticCurveTo(meterX + meterWidth, meterY + meterHeight, meterX + meterWidth - radius, meterY + meterHeight);
+        this.ctx.lineTo(meterX + radius, meterY + meterHeight);
+        this.ctx.quadraticCurveTo(meterX, meterY + meterHeight, meterX, meterY + meterHeight - radius);
+        this.ctx.lineTo(meterX, meterY + radius);
+        this.ctx.quadraticCurveTo(meterX, meterY, meterX + radius, meterY);
+      } else if (progressWidth > radius) {
+        this.ctx.moveTo(meterX + radius, meterY);
+        this.ctx.lineTo(meterX + progressWidth, meterY);
+        this.ctx.lineTo(meterX + progressWidth, meterY + meterHeight);
+        this.ctx.lineTo(meterX + radius, meterY + meterHeight);
+        this.ctx.quadraticCurveTo(meterX, meterY + meterHeight, meterX, meterY + meterHeight - radius);
+        this.ctx.lineTo(meterX, meterY + radius);
+        this.ctx.quadraticCurveTo(meterX, meterY, meterX + radius, meterY);
+      } else {
+        this.ctx.arc(meterX + progressWidth / 2, meterY + meterHeight / 2, progressWidth / 2, 0, Math.PI * 2);
+      }
+      this.ctx.closePath();
+      this.ctx.fill();
+    }
+    
+    // Draw level text
+    this.ctx.font = 'bold 16px Arial';
+    this.ctx.fillStyle = color;
+    this.ctx.textAlign = 'center';
+    this.ctx.textBaseline = 'middle';
+    this.ctx.fillText(level, meterX + meterWidth / 2, meterY + meterHeight / 2);
+    
+    this.ctx.restore();
+  }
+  
+  drawComboCounter(count: number, multiplier: number): void {
+    const comboX = this.canvas.width / 2;
+    const comboY = 100;
+    
+    // Draw combo text with pulsing animation
+    const pulseScale = 1.0 + Math.sin(performance.now() * 0.01) * 0.1;
+    
+    this.ctx.save();
+    this.ctx.translate(comboX, comboY);
+    this.ctx.scale(pulseScale, pulseScale);
+    
+    // Draw background
+    const text = `COMBO x${count}`;
+    this.ctx.font = 'bold 32px Arial';
+    const metrics = this.ctx.measureText(text);
+    const padding = 15;
+    const bgWidth = metrics.width + padding * 2;
+    const bgHeight = 50;
+    
+    this.ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+    this.ctx.beginPath();
+    const radius = 10;
+    this.ctx.moveTo(-bgWidth / 2 + radius, -bgHeight / 2);
+    this.ctx.lineTo(bgWidth / 2 - radius, -bgHeight / 2);
+    this.ctx.quadraticCurveTo(bgWidth / 2, -bgHeight / 2, bgWidth / 2, -bgHeight / 2 + radius);
+    this.ctx.lineTo(bgWidth / 2, bgHeight / 2 - radius);
+    this.ctx.quadraticCurveTo(bgWidth / 2, bgHeight / 2, bgWidth / 2 - radius, bgHeight / 2);
+    this.ctx.lineTo(-bgWidth / 2 + radius, bgHeight / 2);
+    this.ctx.quadraticCurveTo(-bgWidth / 2, bgHeight / 2, -bgWidth / 2, bgHeight / 2 - radius);
+    this.ctx.lineTo(-bgWidth / 2, -bgHeight / 2 + radius);
+    this.ctx.quadraticCurveTo(-bgWidth / 2, -bgHeight / 2, -bgWidth / 2 + radius, -bgHeight / 2);
+    this.ctx.closePath();
+    this.ctx.fill();
+    
+    // Draw text
+    this.ctx.fillStyle = '#fbbf24'; // amber
+    this.ctx.textAlign = 'center';
+    this.ctx.textBaseline = 'middle';
+    this.ctx.fillText(text, 0, 0);
+    
+    // Draw multiplier text below
+    const multText = `${multiplier.toFixed(1)}x`;
+    this.ctx.font = 'bold 20px Arial';
+    this.ctx.fillStyle = '#10b981'; // green
+    this.ctx.fillText(multText, 0, 30);
+    
+    this.ctx.restore();
+  }
+  
+  drawStyleNotification(notification: { text: string; x: number; y: number; life: number; maxLife: number; scale: number; color: string }): void {
+    const alpha = notification.life / notification.maxLife;
+    
+    this.ctx.save();
+    
+    // Set composite operation to prevent smearing
+    this.ctx.globalCompositeOperation = 'source-over';
+    
+    // Set alpha and transform
+    this.ctx.globalAlpha = alpha;
+    this.ctx.translate(notification.x, notification.y);
+    this.ctx.scale(notification.scale, notification.scale);
+    
+    // Set text properties
+    this.ctx.font = 'bold 24px Arial';
+    this.ctx.fillStyle = notification.color;
+    this.ctx.textAlign = 'center';
+    this.ctx.textBaseline = 'middle';
+    
+    // Begin path to ensure clean rendering
+    this.ctx.beginPath();
+    
+    // Draw glow effect
+    this.ctx.shadowBlur = 10;
+    this.ctx.shadowColor = notification.color;
+    this.ctx.shadowOffsetX = 0;
+    this.ctx.shadowOffsetY = 0;
+    
+    // Draw the text
+    this.ctx.fillText(notification.text, 0, 0);
+    
+    // Immediately reset shadow properties to prevent smearing
+    this.ctx.shadowBlur = 0;
+    this.ctx.shadowColor = 'transparent';
+    this.ctx.shadowOffsetX = 0;
+    this.ctx.shadowOffsetY = 0;
+    this.ctx.globalAlpha = 1.0;
+    this.ctx.globalCompositeOperation = 'source-over';
+    
+    this.ctx.restore();
+  }
+  
   // Draw smooth horizontal walls by merging all walls at the same Y position
   drawHorizontalWalls(walls: Obstacle[]): void {
       if (walls.length === 0) return;
@@ -2796,8 +5068,10 @@ export class Renderer {
         }
       }
       
-      // Debug: Log if we have walls but none are rendering
-      if (walls.length > 0 && renderedCount === 0) {
+      // Debug: Log if we have walls but none are rendering (only in development/debug mode)
+      // Check for debug mode via environment or disable in production
+      const isDebugMode = typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production';
+      if (isDebugMode && walls.length > 0 && renderedCount === 0) {
         console.warn(`[Renderer] No horizontal walls rendered! Total: ${walls.length}`);
         walls.forEach((w, idx) => {
           if (w) {

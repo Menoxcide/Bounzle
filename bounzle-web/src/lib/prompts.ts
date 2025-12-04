@@ -19,22 +19,39 @@ PLAYABILITY REQUIREMENTS:
 4. Gap positioning: Keep gaps in the middle 60% of screen (0.2-0.8 normalized) to allow for vertical movement
 5. Sequence validation: Each gap must be reachable from the previous gap given the obstacle spacing and physics
 
+HORIZONTAL WALLS:
+- Horizontal walls span the full width of the screen and create platforms/challenges
+- Each chunk SHOULD include 0-2 horizontal walls to add variety and challenge
+- Horizontal walls should have gaps (gapX, gapWidth) that align with vertical obstacle gaps when possible
+- wallY: 0.0 = top of screen, 1.0 = bottom of screen, 0.5 = middle
+- gapX: 0.0 = left edge, 1.0 = right edge, 0.5 = center
+- gapWidth: 0.2-0.6 normalized (20-60% of screen width)
+- Horizontal walls help create interesting navigation paths and connect vertical obstacles
+
 GENERATION RULES:
 - Start with easier gaps (larger, centered) and gradually increase difficulty
 - Ensure smooth transitions: if previous gap was at Y=0.5, next gap should be within Y=0.3-0.7 range
 - Gap heights should decrease gradually with difficulty, never below 0.15 normalized
 - Avoid creating impossible sequences where the ball cannot physically reach the next gap
 - Consider that the ball falls due to gravity and can only jump upward - it cannot move down faster than gravity allows
+- Include horizontal walls in most chunks (1-2 per chunk) to create continuous platform challenges
 
 Return ONLY valid, COMPLETE JSON with this schema:
 {
   "seed": number,
   "chunks": [
     {
-      "gapY": number,        // center Y of safe gap (0.2–0.8 normalized, smooth transitions)
+      "gapY": number,        // center Y of safe gap in vertical obstacle (0.2–0.8 normalized, smooth transitions)
       "gapHeight": number,   // 0.15–0.3 normalized (minimum 120px absolute)
       "obstacleType": "pipe"|"spike"|"moving",
-      "theme": "normal"|"neon"|"lava"
+      "theme": "normal"|"neon"|"lava",
+      "horizontalWalls": [  // Optional: 0-2 horizontal walls per chunk
+        {
+          "wallY": number,    // Y position of wall (0.0-1.0, 0=top, 1=bottom)
+          "gapX": number,     // center X of gap in wall (0.0-1.0, 0=left, 1=right)
+          "gapWidth": number  // width of gap (0.2-0.6 normalized)
+        }
+      ]
     }
     // Generate exactly 20 chunks with smooth, playable transitions
   ]

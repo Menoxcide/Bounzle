@@ -28,6 +28,10 @@ export default function GameCanvas() {
   const [rank, setRank] = useState<number | null>(null);
   const [isMuted, setIsMuted] = useState(false);
   const [continueCount, setContinueCount] = useState(0);
+  const [isSavingScore, setIsSavingScore] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+  const retryCountRef = useRef(0); // Track retries synchronously for logic checks
   const sessionIdRef = useRef<string>(`session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
   const hasRecordedGameOverRef = useRef(false);
   const isInitializingRef = useRef(false); // Prevent multiple initializations
@@ -63,47 +67,94 @@ export default function GameCanvas() {
     }
   }, []); // Empty deps - use ref instead
 
-  const handleGameOver = useCallback(async (score: number) => {
+  const handleGameOver = useCallback(async (score: number, isRetry: boolean = false) => {
     // Prevent multiple game over side-effects from firing (e.g. duplicate callbacks)
-    if (hasRecordedGameOverRef.current) {
+    // Allow retry attempts (isRetry = true) to bypass this check
+    if (!isRetry && hasRecordedGameOverRef.current) {
       console.log('[GameCanvas] handleGameOver called but already recorded, ignoring');
       return;
     }
-    hasRecordedGameOverRef.current = true;
 
-    console.log('[GameCanvas] handleGameOver called with score:', score);
+    console.log('[GameCanvas] handleGameOver called with score:', score, isRetry ? '(retry)' : '');
     setFinalScore(score);
-    
-    // Use setTimeout to ensure dialog opens after React state update
-    // Also add a small delay to ensure the game state has fully transitioned
-    setTimeout(() => {
-      console.log('[GameCanvas] Opening game over dialog');
-      setIsDialogOpen(true);
-    }, 100); // Increased delay slightly to ensure state is ready
+    setSaveError(null);
 
-    // Save score to Supabase (only save once per game session, not on each continue)
-    // We'll track if we've already saved for this game session
+    // Save score to Supabase FIRST before opening dialog
+    // Only save once per game session, not on each continue
     const currentUser = userRef.current;
+    
     if (currentUser) {
+      // Open dialog immediately to show loading state
+      setIsDialogOpen(true);
+      setIsSavingScore(true);
+      
       try {
         const newRank = await saveScoreRef.current(currentUser.id, score);
         setRank(newRank);
+        setIsSavingScore(false);
+        
+        // Mark as recorded only after successful save
+        hasRecordedGameOverRef.current = true;
+        
+        // Show success toast
+        console.log('[GameCanvas] Score saved successfully');
+        toastRef.current({
+          title: "Game Over!",
+          description: `Your score: ${score}${newRank ? ` - Rank: #${newRank}` : ''}`,
+        });
       } catch (error) {
-        console.error('Failed to save score:', error);
+        setIsSavingScore(false);
+        const errorMessage = error instanceof Error ? error.message : 'Failed to save score';
+        console.error('[GameCanvas] Failed to save score:', error);
+        setSaveError(errorMessage);
+        
+        // If retry count is less than 3, allow retry
+        // Use ref for synchronous check since state updates are async
+        if (retryCountRef.current < 3) {
+          toastRef.current({
+            title: "Score Save Failed",
+            description: `${errorMessage}. You can retry from the dialog.`,
+            variant: "destructive",
+          });
+        } else {
+          // Max retries reached, mark as recorded
+          hasRecordedGameOverRef.current = true;
+          toastRef.current({
+            title: "Score Save Failed",
+            description: `Unable to save score after multiple attempts: ${errorMessage}`,
+            variant: "destructive",
+          });
+        }
       }
+    } else {
+      // No user logged in - skip save and show dialog immediately
+      console.log('[GameCanvas] No user logged in, skipping score save');
+      hasRecordedGameOverRef.current = true;
+      setIsDialogOpen(true);
+      
+      toastRef.current({
+        title: "Game Over!",
+        description: `Your score: ${score}. Log in to save your score to the leaderboard!`,
+      });
     }
-
-    // Show game over toast
-    toastRef.current({
-      title: "Game Over!",
-      description: `Your score: ${score}`,
-    });
   }, []); // Empty deps - use refs instead
 
   // Initialize AdMob
   useEffect(() => {
     let isMounted = true;
-    let timeoutId: NodeJS.Timeout | null = null;
+    const timeoutIds: Set<NodeJS.Timeout> = new Set();
+    let idleCallbackId: number | null = null;
+    
+    const clearAllTimeouts = () => {
+      for (const id of timeoutIds) {
+        clearTimeout(id);
+      }
+      timeoutIds.clear();
+      if (idleCallbackId !== null && typeof window !== 'undefined' && 'cancelIdleCallback' in window) {
+        window.cancelIdleCallback(idleCallbackId);
+        idleCallbackId = null;
+      }
+    };
     
     const initAdMob = async () => {
       try {
@@ -111,24 +162,29 @@ export default function GameCanvas() {
         // Only show ad if component is still mounted and initialization succeeded
         if (isMounted) {
           // Wait a bit more to ensure adsbygoogle is fully ready
-          timeoutId = setTimeout(() => {
+          const showAdTimeoutId = setTimeout(() => {
+            timeoutIds.delete(showAdTimeoutId);
             if (isMounted) {
               // Use requestIdleCallback to show ad without blocking
               if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
-                window.requestIdleCallback(() => {
+                idleCallbackId = window.requestIdleCallback(() => {
+                  idleCallbackId = null;
                   if (isMounted && typeof window !== 'undefined' && window.adsbygoogle) {
                     admobService.showBannerAd();
                   }
                 }, { timeout: 2000 });
               } else {
-                setTimeout(() => {
+                const fallbackTimeoutId = setTimeout(() => {
+                  timeoutIds.delete(fallbackTimeoutId);
                   if (isMounted && typeof window !== 'undefined' && window.adsbygoogle) {
                     admobService.showBannerAd();
                   }
                 }, 500);
+                timeoutIds.add(fallbackTimeoutId);
               }
             }
           }, 500);
+          timeoutIds.add(showAdTimeoutId);
         }
       } catch (error) {
         console.error('Failed to initialize AdMob:', error);
@@ -137,14 +193,13 @@ export default function GameCanvas() {
     };
 
     // Delay initialization slightly to avoid blocking initial render
-    timeoutId = setTimeout(initAdMob, 100);
+    const initTimeoutId = setTimeout(initAdMob, 100);
+    timeoutIds.add(initTimeoutId);
 
     // Cleanup AdMob when component unmounts
     return () => {
       isMounted = false;
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
+      clearAllTimeouts();
       admobService.hideBannerAd();
     };
   }, []);
@@ -282,6 +337,10 @@ export default function GameCanvas() {
       setIsDialogOpen(false);
       setRank(null);
       setContinueCount(0); // Reset continue count on new game
+      setSaveError(null); // Clear any previous save errors
+      setRetryCount(0); // Reset retry count
+      retryCountRef.current = 0; // Reset ref as well
+      setIsSavingScore(false); // Reset saving state
     }
   };
 
@@ -390,6 +449,15 @@ export default function GameCanvas() {
     handleContinue();
   };
 
+  const handleRetrySaveScore = async () => {
+    if (finalScore > 0 && userRef.current) {
+      // Increment both state and ref
+      retryCountRef.current += 1;
+      setRetryCount(retryCountRef.current);
+      await handleGameOver(finalScore, true); // Pass isRetry = true
+    }
+  };
+
   return (
     <div className="relative w-full h-screen overflow-hidden bg-gradient-to-b from-slate-900 to-slate-800">
       <canvas 
@@ -445,10 +513,32 @@ export default function GameCanvas() {
           <CardContent className="space-y-4">
             <div className="text-center py-4">
               <p className="text-2xl font-bold text-white">Score: {finalScore}</p>
-              {rank && (
+              {isSavingScore && (
+                <p className="text-sm text-slate-400 mt-2">
+                  Saving score...
+                </p>
+              )}
+              {rank && !isSavingScore && (
                 <p className="text-lg text-purple-400 mt-2">
                   Your rank: #{rank}
                 </p>
+              )}
+              {saveError && !isSavingScore && (
+                <div className="mt-2 space-y-2">
+                  <p className="text-sm text-red-400">
+                    Failed to save score: {saveError}
+                  </p>
+                  {retryCount < 3 && (
+                    <Button
+                      onClick={handleRetrySaveScore}
+                      variant="outline"
+                      size="sm"
+                      className="text-xs border-red-400 text-red-400 hover:bg-red-400/10"
+                    >
+                      Retry ({3 - retryCount} attempts left)
+                    </Button>
+                  )}
+                </div>
               )}
             </div>
             

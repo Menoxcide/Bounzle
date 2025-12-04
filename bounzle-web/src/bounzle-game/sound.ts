@@ -4,6 +4,7 @@ export class SoundManager {
   private audioContext: AudioContext | null = null;
   private sounds: Map<string, AudioBuffer> = new Map();
   private isAudioEnabled: boolean = true;
+  private activeTimeouts: Set<NodeJS.Timeout> = new Set();
   
   constructor() {
     // Try to create audio context
@@ -19,6 +20,30 @@ export class SoundManager {
   // Enable or disable audio
   setAudioEnabled(enabled: boolean): void {
     this.isAudioEnabled = enabled;
+  }
+  
+  // Destroy and clean up resources
+  destroy(): void {
+    // Clear all pending timeouts
+    for (const timeoutId of this.activeTimeouts) {
+      clearTimeout(timeoutId);
+    }
+    this.activeTimeouts.clear();
+    
+    // Close audio context if it exists
+    if (this.audioContext) {
+      try {
+        this.audioContext.close().catch(() => {
+          // Ignore errors when closing
+        });
+      } catch {
+        // Ignore errors if context is already closed
+      }
+      this.audioContext = null;
+    }
+    
+    // Clear sound cache
+    this.sounds.clear();
   }
   
   // Play a beep sound
@@ -102,22 +127,30 @@ export class SoundManager {
     try {
       // Play multiple tones for a coin effect
       for (let i = 0; i < 3; i++) {
-        setTimeout(() => {
-          const oscillator = this.audioContext!.createOscillator();
-          const gainNode = this.audioContext!.createGain();
+        const timeoutId = setTimeout(() => {
+          this.activeTimeouts.delete(timeoutId);
+          if (!this.audioContext) return; // Context was destroyed
           
-          oscillator.connect(gainNode);
-          gainNode.connect(this.audioContext!.destination);
-          
-          oscillator.type = 'triangle';
-          oscillator.frequency.value = 440 + i * 220;
-          
-          gainNode.gain.setValueAtTime(0.2, this.audioContext!.currentTime);
-          gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext!.currentTime + 0.1);
-          
-          oscillator.start(this.audioContext!.currentTime);
-          oscillator.stop(this.audioContext!.currentTime + 0.1);
+          try {
+            const oscillator = this.audioContext.createOscillator();
+            const gainNode = this.audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(this.audioContext.destination);
+            
+            oscillator.type = 'triangle';
+            oscillator.frequency.value = 440 + i * 220;
+            
+            gainNode.gain.setValueAtTime(0.2, this.audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.1);
+            
+            oscillator.start(this.audioContext.currentTime);
+            oscillator.stop(this.audioContext.currentTime + 0.1);
+          } catch {
+            // Ignore errors if context was closed
+          }
         }, i * 50);
+        this.activeTimeouts.add(timeoutId);
       }
     } catch (e) {
       console.warn('Failed to play coin sound:', e);

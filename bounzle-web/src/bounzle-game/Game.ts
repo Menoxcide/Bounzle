@@ -4,11 +4,12 @@
 import { Renderer } from './renderer';
 import { InputHandler } from './input';
 import { updateBallPosition, applyJumpForce, checkCollision, checkBoundaryCollision, SCROLL_SPEED } from './physics';
-import { Ball, Obstacle, GameStatus, LevelChunk, LevelData, ThemeKey, GameStateSnapshot, PowerUp, PowerUpType, GapType, WallStyle, RandomEvent, RandomEventType } from './types';
+import { Ball, Obstacle, GameStatus, LevelChunk, LevelData, ThemeKey, GameStateSnapshot, PowerUp, PowerUpType, GapType, WallStyle, RandomEvent, RandomEventType, StyleNotification } from './types';
 import { getTheme, getRandomThemeKey } from './themes';
-import { ParticleSystem } from './particles';
+import { ParticleSystem, Particle } from './particles';
 import { SoundManager } from './sound';
 import { getConfigForDifficulty, selectFromProbabilities, randomInRange, getRandomColorFromPalette, GameConfig } from './config';
+import { StyleMeter, ComboTracker } from './styleSystem';
 
 export default class Game {
   private canvas: HTMLCanvasElement;
@@ -16,10 +17,15 @@ export default class Game {
   private inputHandler: InputHandler;
   private animationFrameId: number | null = null;
   private resizeRafId: number | null = null; // RAF ID for resize operations to avoid forced reflows
+  private errorRecoveryTimeoutId: NodeJS.Timeout | null = null; // Timeout ID for error recovery
   private resizeHandler: () => void; // Bound resize handler for cleanup
   private isLoopRunning: boolean = false; // Track if game loop is currently running
   private particleSystem: ParticleSystem;
   private soundManager: SoundManager;
+  private styleMeter: StyleMeter;
+  private comboTracker: ComboTracker;
+  private styleNotifications: StyleNotification[] = [];
+  private perfectRunObstacleCount: number = 0;
   
   // Game state
   private ball: Ball;
@@ -54,6 +60,7 @@ export default class Game {
   private cameraOffsetY: number = 0;
   private targetCameraOffsetY: number = 0;
   private readonly CAMERA_FOLLOW_SPEED: number = 0.15; // Smooth camera following
+  private lastCameraLogOffset: number = 0; // Track last logged camera offset for throttling
   
   // Track previous ball position for gap passing detection
   private previousBallPosition: { x: number; y: number } = { x: 0, y: 0 };
@@ -94,7 +101,7 @@ export default class Game {
   private readonly EVENT_SCORE_MILESTONE: number = 50; // Trigger event every 50 points
   
   // Debug logging (set to false to disable)
-  private readonly DEBUG_MODE: boolean = true; // Enabled for debugging instant game over
+  private readonly DEBUG_MODE: boolean = false; // Disabled for production performance
   
   // Level generation
   private levelChunks: LevelChunk[] = [];
@@ -123,10 +130,16 @@ export default class Game {
   private lastCheckpointSave: number = 0;
   private readonly CHECKPOINT_INTERVAL_MS = 2500; // Save checkpoint every 2.5 seconds
   private deathTimestamp: number = 0; // Track when game over occurred
+  private pendingCheckpointIdleCallback: number | null = null; // Track pending idle callback
+  private pendingCheckpointTimeout: NodeJS.Timeout | null = null; // Track pending timeout
   
   // Survival time scoring
   private lastSurvivalScoreTime: number = 0;
   private readonly SURVIVAL_SCORE_INTERVAL_MS = 1000; // 1 second
+  
+  // Throttling for debug logs
+  private lastWallGenerationLog: number = 0;
+  private readonly WALL_LOG_THROTTLE_MS = 1000; // Log wall generation issues max once per second
   
   // Callbacks
   private onGameOver?: (score: number) => void;
@@ -138,6 +151,8 @@ export default class Game {
     this.renderer = new Renderer(canvas);
     this.particleSystem = new ParticleSystem();
     this.soundManager = new SoundManager();
+    this.styleMeter = new StyleMeter();
+    this.comboTracker = new ComboTracker();
     this.inputHandler = new InputHandler(canvas, this.handleTap.bind(this));
     
     // Set callbacks
@@ -162,19 +177,23 @@ export default class Game {
     // Don't initialize horizontal walls in constructor - they should only appear when game starts
     // Initialize with empty array instead
     this.horizontalWalls = [];
-    console.log('[GAME_DEBUG] Horizontal walls initialized as empty array in constructor');
+    if (this.DEBUG_MODE) {
+      console.log('[GAME_DEBUG] Horizontal walls initialized as empty array in constructor');
+    }
 
     // Start in idle state with a running render loop so the player
     // immediately sees the tap-to-start message.
     this.status = 'idle';
     // Log initial game state
-    console.log('[GAME_DEBUG] ===== GAME INITIALIZED =====');
-    console.log('[GAME_DEBUG] Canvas dimensions:', { width: this.canvas.width, height: this.canvas.height });
-    console.log('[GAME_DEBUG] Ball starting position:', { x: this.ball.position.x, y: this.ball.position.y });
-    console.log('[GAME_DEBUG] Ball radius:', this.ball.radius);
-    console.log('[GAME_DEBUG] Initial status:', this.status);
-    console.log('[GAME_DEBUG] Horizontal walls count:', this.horizontalWalls.length);
-    console.log('[GAME_DEBUG] =============================');
+    if (this.DEBUG_MODE) {
+      console.log('[GAME_DEBUG] ===== GAME INITIALIZED =====');
+      console.log('[GAME_DEBUG] Canvas dimensions:', { width: this.canvas.width, height: this.canvas.height });
+      console.log('[GAME_DEBUG] Ball starting position:', { x: this.ball.position.x, y: this.ball.position.y });
+      console.log('[GAME_DEBUG] Ball radius:', this.ball.radius);
+      console.log('[GAME_DEBUG] Initial status:', this.status);
+      console.log('[GAME_DEBUG] Horizontal walls count:', this.horizontalWalls.length);
+      console.log('[GAME_DEBUG] =============================');
+    }
 
     this.lastTime = performance.now();
     this.lastPerformanceLog = this.lastTime;
@@ -227,12 +246,13 @@ export default class Game {
       // Play sound effect
       this.soundManager.playBeep(440, 0.1);
       
-      // Add particle effect when tapping
+      // Add particle effect when tapping - use spark particles
       this.particleSystem.addExplosion(
         this.ball.position.x, 
         this.ball.position.y, 
         getTheme(this.currentTheme).ballColor, 
-        5
+        8,
+        'spark'
       );
     } else if (this.status === 'idle') {
       // Only allow starting from idle state, not from gameOver
@@ -276,6 +296,10 @@ export default class Game {
     this.lastDifficultyIncreaseScore = 0;
     this.extraTime = 0;
     this.lastThemeChangeScore = 0;
+    this.styleMeter.reset();
+    this.comboTracker.reset();
+    this.styleNotifications = [];
+    this.perfectRunObstacleCount = 0;
     this.currentTheme = 'normal';
     this.renderer.setTheme(this.currentTheme);
     this.currentLevel = 1;
@@ -303,7 +327,7 @@ export default class Game {
     this.consumedChunkCount = 0;
     this.checkpoint = 0;
     this.lastObstacleX = this.canvas.width;
-    this.lastHorizontalWallX = this.canvas.width; // Initialize for procedural walls
+    this.lastHorizontalWallX = 0; // Initialize to 0 so generation starts immediately
     this.lastHorizontalWallY = { top: 0, bottom: 0 };
     this.ball.position = { x: 100, y: this.canvas.height / 2 };
     this.ball.velocity = { x: 0, y: 0 };
@@ -883,16 +907,28 @@ export default class Game {
   private checkLevelChange(): void {
     const newLevel = this.getLevelNumber();
     if (newLevel !== this.currentLevel) {
+      const previousLevel = this.currentLevel;
       this.currentLevel = newLevel;
       this.renderer.setLevel(this.currentLevel);
       
-      // Optional: Add particle effect when level changes
-      this.particleSystem.addExplosion(
-        this.canvas.width / 2,
-        this.canvas.height / 2,
-        '#8b5cf6', // purple
-        15
-      );
+      // Enhanced particle effect when level/biome changes
+      if (previousLevel !== newLevel) {
+        // Create transition particles across the screen
+        const centerX = this.canvas.width / 2;
+        const centerY = this.canvas.height / 2;
+        
+        // Main burst at center
+        this.particleSystem.addEnergyBurst(centerX, centerY, '#8b5cf6', 30);
+        
+        // Additional bursts at corners for dramatic effect
+        this.particleSystem.addBurst(0, 0, '#8b5cf6', 15);
+        this.particleSystem.addBurst(this.canvas.width, 0, '#8b5cf6', 15);
+        this.particleSystem.addBurst(0, this.canvas.height, '#8b5cf6', 15);
+        this.particleSystem.addBurst(this.canvas.width, this.canvas.height, '#8b5cf6', 15);
+        
+        // Star burst effect
+        this.particleSystem.addStarBurst(centerX, centerY, '#fbbf24', 20);
+      }
       
       // Play level change sound
       this.soundManager.playBeep(660, 0.15);
@@ -926,6 +962,15 @@ export default class Game {
     
     powerUp.collected = true;
     
+    // Add style points for power-up collection
+    const currentTime = performance.now();
+    const comboMultiplier = this.comboTracker.getTotalMultiplier();
+    this.styleMeter.addPowerUpCollection(comboMultiplier);
+    this.comboTracker.addPowerUpCombo(currentTime);
+    
+    // Add notification
+    this.addStyleNotification('POWER-UP!', '#8b5cf6');
+    
     switch (powerUp.type) {
       case 'score':
         // Add bonus score
@@ -936,12 +981,13 @@ export default class Game {
         // Play coin sound
         this.soundManager.playCoin();
         
-        // Add enhanced particle effect
+        // Add enhanced particle effect - use star particles for score
         this.particleSystem.addExplosion(
           powerUp.position.x,
           powerUp.position.y,
           '#fbbf24', // amber-400
-          15
+          12,
+          'star'
         );
         break;
         
@@ -952,12 +998,12 @@ export default class Game {
         // Play coin sound
         this.soundManager.playCoin();
         
-        // Add enhanced particle effect
-        this.particleSystem.addExplosion(
+        // Add enhanced particle effect - use glow particles for life
+        this.particleSystem.addBurst(
           powerUp.position.x,
           powerUp.position.y,
           '#10b981', // green-500
-          20
+          18
         );
         break;
         
@@ -969,12 +1015,13 @@ export default class Game {
         // Play special sound (higher pitch for slowmo)
         this.soundManager.playBeep(1100, 0.25);
         
-        // Add enhanced particle effect
+        // Add enhanced particle effect - use energy particles for slowmo
         this.particleSystem.addExplosion(
           powerUp.position.x,
           powerUp.position.y,
           '#8b5cf6', // purple-500
-          25
+          20,
+          'energy'
         );
         break;
         
@@ -986,12 +1033,13 @@ export default class Game {
         // Play special sound
         this.soundManager.playBeep(800, 0.3);
         
-        // Add enhanced particle effect
+        // Add enhanced particle effect - use spark particles for speed boost
         this.particleSystem.addExplosion(
           powerUp.position.x,
           powerUp.position.y,
           '#f59e0b', // amber-500
-          20
+          18,
+          'spark'
         );
         break;
         
@@ -1002,12 +1050,12 @@ export default class Game {
         // Play coin sound
         this.soundManager.playCoin();
         
-        // Add enhanced particle effect
-        this.particleSystem.addExplosion(
+        // Add enhanced particle effect - use glow particles for shield
+        this.particleSystem.addBurst(
           powerUp.position.x,
           powerUp.position.y,
           '#3b82f6', // blue-500
-          25
+          20
         );
         break;
         
@@ -1019,12 +1067,13 @@ export default class Game {
         // Play special sound
         this.soundManager.playBeep(600, 0.3);
         
-        // Add enhanced particle effect
+        // Add enhanced particle effect - use energy particles for magnet
         this.particleSystem.addExplosion(
           powerUp.position.x,
           powerUp.position.y,
           '#06b6d4', // cyan-500
-          20
+          18,
+          'energy'
         );
         break;
         
@@ -1036,12 +1085,12 @@ export default class Game {
         // Play special sound
         this.soundManager.playBeep(1000, 0.3);
         
-        // Add enhanced particle effect
-        this.particleSystem.addExplosion(
+        // Add enhanced particle effect - use burst for double score
+        this.particleSystem.addBurst(
           powerUp.position.x,
           powerUp.position.y,
           '#fbbf24', // amber-400
-          30
+          25
         );
         break;
         
@@ -1055,12 +1104,13 @@ export default class Game {
         // Play special sound
         this.soundManager.playBeep(500, 0.4);
         
-        // Add enhanced particle effect
+        // Add enhanced particle effect - use energy particles for gravity flip
         this.particleSystem.addExplosion(
           powerUp.position.x,
           powerUp.position.y,
           '#ec4899', // pink-500
-          25
+          20,
+          'energy'
         );
         break;
     }
@@ -1225,6 +1275,18 @@ export default class Game {
     // Append new chunks to existing ones (don't clear)
     this.levelChunks = [...this.levelChunks, ...levelData.chunks];
     
+    // Validate and log horizontal walls in chunks
+    if (this.DEBUG_MODE) {
+      const chunksWithWalls = levelData.chunks.filter(chunk => chunk.horizontalWalls && chunk.horizontalWalls.length > 0);
+      const totalWalls = levelData.chunks.reduce((sum, chunk) => sum + (chunk.horizontalWalls?.length || 0), 0);
+      console.log(`[Game] Loaded ${levelData.chunks.length} chunks: ${chunksWithWalls.length} have horizontal walls (${totalWalls} total walls)`);
+      if (chunksWithWalls.length < levelData.chunks.length) {
+        const chunksWithoutWalls = levelData.chunks.filter(chunk => !chunk.horizontalWalls || chunk.horizontalWalls.length === 0);
+        console.warn(`[Game] ${chunksWithoutWalls.length} chunks have no horizontal walls. Chunk indices:`, 
+          chunksWithoutWalls.map((_, idx) => levelData.chunks.indexOf(chunksWithoutWalls[idx])));
+      }
+    }
+    
     // Don't call generateObstaclesFromChunks() immediately
     // Let the update loop handle generation naturally when needed
     // This prevents premature regeneration of obstacles
@@ -1358,6 +1420,10 @@ export default class Game {
         // Update last gap position (normalized)
         this.lastGapY = chunk.gapY;
         
+        // Generate horizontal walls from this chunk immediately (AI-based, like vertical obstacles)
+        const obstacleX = rightmostX + spacingForThisObstacle;
+        this.generateHorizontalWallsForChunk(chunk, obstacleX, config);
+        
         // Increment consumed chunk count - this chunk is now used
         this.consumedChunkCount++;
       } else {
@@ -1367,6 +1433,16 @@ export default class Game {
         
         // Update last gap position (normalized)
         this.lastGapY = obstacle.gapY / this.canvas.height;
+        
+        // ALWAYS generate procedural horizontal wall when generating procedural vertical obstacle
+        // This ensures horizontal walls are ALWAYS generated alongside vertical obstacles
+        // Use the same X position as the vertical obstacle to maintain alignment
+        try {
+          this.generateProceduralHorizontalWallAtX(obstacle.position.x, config);
+        } catch (error) {
+          console.error('[Game] Error generating procedural horizontal wall in generateObstaclesFromChunks:', error);
+          // Continue - wall generation will retry next time
+        }
       }
       
       // Only add new obstacles, never modify existing ones
@@ -1381,36 +1457,360 @@ export default class Game {
     
     // Mark that we've generated obstacles
     this.needsObstacleGeneration = false;
-    
-    // Generate procedural horizontal walls alongside vertical walls
-    // Note: This is called separately in update() loop, but we can also call it here for initial generation
   }
   
-  // Generate procedural horizontal walls at various Y positions with gaps
+  // Generate horizontal walls for a single AI chunk (called when chunk is consumed)
+  private generateHorizontalWallsForChunk(chunk: LevelChunk, obstacleX: number, config: GameConfig): void {
+    // Generate horizontal walls from AI chunk data (like vertical obstacles)
+    if (!chunk.horizontalWalls || chunk.horizontalWalls.length === 0) {
+      // If chunk doesn't have horizontal walls data, generate procedurally instead
+      // This ensures horizontal walls are ALWAYS generated when vertical obstacles are generated
+      if (this.DEBUG_MODE) {
+        console.log(`[Game] Chunk ${this.consumedChunkCount} has no horizontalWalls data - generating procedurally at X=${obstacleX.toFixed(1)}`);
+      }
+      this.generateProceduralHorizontalWallAtX(obstacleX, config);
+      return;
+    }
+    
+    // Calculate spacing for horizontal walls - use same spacing as vertical obstacles
+    // Horizontal walls should be spaced independently along X-axis
+    const horizontalWallSpacing = config.walls.spacing;
+    
+    // Start positioning from lastHorizontalWallX, or use obstacleX if no walls exist yet
+    let currentWallX = this.horizontalWalls.length === 0 
+      ? Math.max(this.lastHorizontalWallX || 0, obstacleX)
+      : Math.max(this.lastHorizontalWallX || 0, this.ball.position.x);
+    
+    // Generate each horizontal wall from the chunk
+    for (const wallData of chunk.horizontalWalls) {
+      // Convert normalized values to pixels
+      const wallY = wallData.wallY * this.canvas.height;
+      
+      // Ensure wall is within screen bounds (with margin)
+      if (wallY < 20 || wallY > this.canvas.height - 20) {
+        if (this.DEBUG_MODE) {
+          console.log(`[Game] Skipping horizontal wall at Y=${wallY.toFixed(1)} - out of bounds`);
+        }
+        continue;
+      }
+      
+      // Position wall independently along X-axis with proper spacing
+      // If this is not the first wall in this chunk, add spacing
+      const wallIndex = chunk.horizontalWalls.indexOf(wallData);
+      if (wallIndex > 0) {
+        currentWallX += horizontalWallSpacing;
+      }
+      
+      // Gap X is normalized (0-1) relative to wall width, convert to absolute position
+      const gapX = currentWallX + (wallData.gapX * this.canvas.width);
+      const gapWidth = wallData.gapWidth * this.canvas.width;
+      
+      // Ensure gap width is reasonable (minimum 200px for playability)
+      const minGapWidth = 200;
+      const finalGapWidth = Math.max(minGapWidth, gapWidth);
+      
+      // Ensure gap X is within wall bounds
+      const wallLeft = currentWallX;
+      const wallRight = currentWallX + this.canvas.width;
+      const gapLeft = gapX - finalGapWidth / 2;
+      const gapRight = gapX + finalGapWidth / 2;
+      
+      // Adjust gap X if it goes outside wall bounds
+      let adjustedGapX = gapX;
+      if (gapLeft < wallLeft + 50) {
+        adjustedGapX = wallLeft + 50 + finalGapWidth / 2;
+      } else if (gapRight > wallRight - 50) {
+        adjustedGapX = wallRight - 50 - finalGapWidth / 2;
+      }
+      
+      // Check if we already have a wall at this Y position with overlapping X range
+      // Since walls span full width, check for X overlap, not just proximity
+      const existingWall = this.horizontalWalls.find(w => {
+        if (!w) return false;
+        // Check if Y positions are similar (within 20px tolerance)
+        const yMatch = Math.abs(w.position.y - wallY) < 20;
+        if (!yMatch) return false;
+        
+        // Check if X ranges overlap (walls span full width)
+        const existingLeft = w.position.x;
+        const existingRight = w.position.x + w.width;
+        const newLeft = currentWallX;
+        const newRight = currentWallX + this.canvas.width;
+        
+        // Overlap if: existingLeft < newRight AND existingRight > newLeft
+        const xOverlap = existingLeft < newRight && existingRight > newLeft;
+        return xOverlap;
+      });
+      
+      if (existingWall) {
+        if (this.DEBUG_MODE) {
+          console.log(`[Game] Skipping duplicate horizontal wall at Y=${wallY.toFixed(1)}, X=${currentWallX.toFixed(1)} - overlaps with existing wall`);
+        }
+        continue; // Skip if wall already exists at this position
+      }
+      
+      // Apply config variations: color, style (matching vertical obstacles)
+      const wallColor = getRandomColorFromPalette(config.walls.colorPalette);
+      const wallStyle = selectFromProbabilities(config.walls.styleProbabilities);
+      
+      // Map wall style to obstacle type
+      let obstacleType: 'pipe' | 'spike' | 'moving' = chunk.obstacleType || 'pipe';
+      if (wallStyle === 'spike') obstacleType = 'spike';
+      else if (wallStyle === 'moving') obstacleType = 'moving';
+      else if (wallStyle === 'pipe') obstacleType = 'pipe';
+      
+      // Create horizontal wall obstacle
+      const wallHeight = 60; // Match wall height from generateWallZone
+      const wall: Obstacle = {
+        position: { x: currentWallX, y: wallY },
+        width: this.canvas.width, // Horizontal walls span full width
+        height: wallHeight,
+        gapX: adjustedGapX,
+        gapWidth: finalGapWidth,
+        gapY: 0, // Not used for horizontal walls
+        gapHeight: 0, // Not used for horizontal walls
+        orientation: 'horizontal',
+        obstacleType: obstacleType,
+        wallStyle: wallStyle,
+        wallColor: wallColor,
+        theme: chunk.theme || this.currentTheme,
+        passed: false
+      };
+      
+      this.horizontalWalls.push(wall);
+      
+      // Update lastHorizontalWallX to track the rightmost edge of generated walls
+      // This ensures proper spacing for next generation
+      this.lastHorizontalWallX = Math.max(this.lastHorizontalWallX, currentWallX + this.canvas.width);
+      
+      if (this.DEBUG_MODE) {
+        console.log(`[Game] Generated horizontal wall from AI chunk: X=${currentWallX.toFixed(1)}, Y=${wallY.toFixed(1)}, gapX=${adjustedGapX.toFixed(1)}, gapWidth=${finalGapWidth.toFixed(1)}, lastHorizontalWallX=${this.lastHorizontalWallX.toFixed(1)}`);
+      }
+    }
+  }
+  
+  // Generate a single procedural horizontal wall at a specific X position
+  // This ensures horizontal walls are always generated alongside vertical obstacles
+  private generateProceduralHorizontalWallAtX(wallX: number, config: GameConfig): void {
+    const wallHeight = 60;
+    const minGapWidth = 200;
+    
+    // Find a valid Y position that doesn't overlap with existing walls or block vertical gaps
+    const margin = this.canvas.height * 0.1;
+    const minY = margin;
+    const maxY = this.canvas.height - margin - wallHeight;
+    
+    // Helper to check if a Y position would overlap or block gaps
+    const wouldOverlap = (testY: number): boolean => {
+      const testTop = testY;
+      const testBottom = testY + wallHeight;
+      const minVerticalSpacing = wallHeight + 300;
+      
+      // Check against existing horizontal walls
+      for (const existingWall of this.horizontalWalls) {
+        if (!existingWall || !existingWall.position) continue;
+        const distanceX = Math.abs(existingWall.position.x - wallX);
+        if (distanceX > this.canvas.width * 2) continue;
+        
+        const existingTop = existingWall.position.y;
+        const existingBottom = existingWall.position.y + existingWall.height;
+        if (!(testBottom < existingTop - minVerticalSpacing || testTop > existingBottom + minVerticalSpacing)) {
+          return true;
+        }
+      }
+      
+      // Check if it would block vertical gaps
+      if (this.checkWallBlocksVerticalGap(testY, wallHeight, wallX, this.canvas.width)) {
+        return true;
+      }
+      
+      return false;
+    };
+    
+    // Find a valid Y position
+    let wallY: number | undefined;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 50;
+    
+    while (attempts < MAX_ATTEMPTS) {
+      const testY = minY + Math.random() * (maxY - minY);
+      if (!wouldOverlap(testY)) {
+        wallY = testY;
+        break;
+      }
+      attempts++;
+    }
+    
+    // Fallback: use center if no valid position found
+    if (wallY === undefined) {
+      wallY = this.canvas.height / 2 - wallHeight / 2;
+    }
+    
+    // Generate gap for the wall
+    const wallLeft = wallX;
+    const wallRight = wallX + this.canvas.width;
+    const gapMargin = this.canvas.width * 0.25;
+    const gapCenterRange = this.canvas.width * 0.5;
+    const gapCenterStart = wallLeft + gapMargin;
+    let gapX = gapCenterStart + Math.random() * gapCenterRange;
+    
+    // Gap width
+    const level = this.getLevelNumber();
+    const gapSizeMultiplier = Math.max(0.75, 1.0 - (level - 1) * 0.03);
+    const normalizedGapWidth = randomInRange(config.walls.gapHeightMin, config.walls.gapHeightMax);
+    let gapWidth = normalizedGapWidth * this.canvas.width * gapSizeMultiplier;
+    gapWidth = Math.max(gapWidth, minGapWidth);
+    gapWidth = Math.min(gapWidth, this.canvas.width * 0.8);
+    
+    // Ensure gap is within wall bounds
+    const gapLeft = gapX - gapWidth / 2;
+    const gapRight = gapX + gapWidth / 2;
+    const marginFromEdge = gapWidth / 2 + 10;
+    
+    if (gapLeft < wallLeft + marginFromEdge) {
+      gapX = wallLeft + marginFromEdge;
+    } else if (gapRight > wallRight - marginFromEdge) {
+      gapX = wallRight - marginFromEdge;
+    }
+    
+    // Determine gap type
+    const gapTypeRoll = Math.random();
+    let gapType: GapType = 'none';
+    if (gapTypeRoll < 0.15) {
+      gapType = 'powerup';
+      gapWidth = Math.max(gapWidth * 0.9, minGapWidth);
+    } else if (gapTypeRoll < 0.25) {
+      gapType = 'shortcut';
+      gapWidth = Math.max(gapWidth * 0.85, minGapWidth);
+    }
+    
+    // Create wall
+    const wallStyle = selectFromProbabilities(config.walls.styleProbabilities) as WallStyle;
+    const wallColor = getRandomColorFromPalette(config.walls.colorPalette);
+    let obstacleType: 'pipe' | 'spike' | 'moving' = 'pipe';
+    if (wallStyle === 'spike') obstacleType = 'spike';
+    else if (wallStyle === 'moving') obstacleType = 'moving';
+    
+    const wall: Obstacle = {
+      position: { x: wallX, y: wallY },
+      width: this.canvas.width,
+      height: wallHeight,
+      gapY: 0,
+      gapHeight: 0,
+      orientation: 'horizontal',
+      gapX: gapX,
+      gapWidth: gapWidth,
+      gapType: gapType,
+      obstacleType: obstacleType,
+      wallStyle: wallStyle,
+      wallColor: wallColor,
+      theme: this.currentTheme,
+      passed: false
+    };
+    
+    // Add power-up if it's a power-up gap
+    if (gapType === 'powerup' && Math.random() < config.powerUps.spawnChance * 1.5) {
+      wall.powerUp = this.generatePowerUp(gapX, wallY + wallHeight / 2, config);
+    }
+    
+    this.horizontalWalls.push(wall);
+    
+    // Update lastHorizontalWallX
+    this.lastHorizontalWallX = Math.max(this.lastHorizontalWallX, wallX + this.canvas.width);
+    
+    if (this.DEBUG_MODE) {
+      console.log(`[Game] Generated procedural horizontal wall at X=${wallX.toFixed(1)}, Y=${wallY.toFixed(1)}, gapX=${gapX.toFixed(1)}, gapWidth=${gapWidth.toFixed(1)}`);
+    }
+  }
+  
+  // Generate procedural horizontal walls (fallback when AI chunks run out or don't have horizontal walls)
   private generateProceduralHorizontalWalls(): void {
+    // Generate procedurally when:
+    // 1. No chunks exist (levelChunks.length === 0), OR
+    // 2. All chunks have been consumed (consumedChunkCount >= levelChunks.length), OR
+    // 3. Chunks exist but don't have horizontal walls data (fallback generation)
+    // The distance/count checks below will prevent over-generation
+    
+    // Note: We no longer block procedural generation when chunks are available,
+    // because chunks may not always have horizontal walls data. The existing
+    // distance and count checks ensure we don't generate too many walls.
+    
     const config = getConfigForDifficulty(this.difficulty);
     
-    // lastHorizontalWallX represents where we last generated walls (in world coordinates)
-    // As walls scroll left, this value doesn't change - it's the generation point
-    // Start generation from where we last generated walls
-    let rightmostX = this.lastHorizontalWallX || this.canvas.width;
+    // Check if remaining chunks have horizontal walls data
+    // If chunks exist but don't have horizontal walls, we need continuous procedural generation
+    const hasChunksWithoutWalls = this.levelChunks.length > 0 && 
+      this.consumedChunkCount < this.levelChunks.length &&
+      this.levelChunks.slice(this.consumedChunkCount).some(chunk => 
+        !chunk.horizontalWalls || chunk.horizontalWalls.length === 0
+      );
     
-    // Only generate if we need more walls ahead of the ball
-    // Check if we already have enough walls ahead
-    const minDistanceAhead = this.canvas.width * 2;
+    // Calculate rightmostX from existing walls first, then fall back to lastHorizontalWallX or ball position
+    // This ensures we always start generation from a valid position, not X=0
+    let rightmostX: number;
+    
+    if (this.horizontalWalls.length > 0) {
+      // Calculate from existing walls - find the rightmost wall edge
+      const wallPositions = this.horizontalWalls
+        .filter(w => w && w.position)
+        .map(w => w.position.x + w.width);
+      rightmostX = Math.max(...wallPositions, this.lastHorizontalWallX || 0);
+    } else {
+      // No walls exist - use ball position or lastHorizontalWallX, whichever is greater
+      // This ensures generation starts from the ball's position, not X=0
+      rightmostX = Math.max(
+        this.lastHorizontalWallX || 0,
+        this.ball.position.x
+      );
+    }
+    
+    // Ensure rightmostX is always at least the ball's position to prevent starting at X=0
+    rightmostX = Math.max(rightmostX, this.ball.position.x);
+    
+    // Minimum wall count threshold
+    // Horizontal walls should appear as often or more often than vertical obstacles
+    const MIN_WALL_COUNT = 0; // No minimum - let density control generation
+    const wallsAheadOfBall = this.horizontalWalls.filter(w => w && w.position.x > this.ball.position.x).length;
+    
+    // Calculate target distance with buffer (needed for generation and logging)
+    // Match vertical obstacle generation threshold (2.0x canvas width)
+    const minDistanceAhead = this.canvas.width * 2.0; // Match vertical obstacles - generate frequently
     const targetDistance = this.ball.position.x + minDistanceAhead;
     
-    // Add buffer to ensure continuous generation - generate slightly ahead of target
-    const GENERATION_BUFFER = this.canvas.width * 0.5; // Generate 0.5 screen widths ahead
+    // Add buffer to ensure continuous generation - much smaller buffer
+    const GENERATION_BUFFER = this.canvas.width * 0.5; // Small buffer
     const targetDistanceWithBuffer = targetDistance + GENERATION_BUFFER;
     
-    // Generate walls continuously - ensure we always have walls ahead
-    // Generate if last generation point is less than target distance (with buffer)
-    if (rightmostX >= targetDistanceWithBuffer) {
+    // Critical: Always generate if we have no walls
+    if (this.horizontalWalls.length === 0) {
       if (this.DEBUG_MODE) {
-        console.log(`[Game] Skipping wall generation - last generation at ${rightmostX.toFixed(1)}, target is ${targetDistanceWithBuffer.toFixed(1)}, ballX: ${this.ball.position.x.toFixed(1)}`);
+        console.log(`[Game] No walls exist - forcing generation. ballX: ${this.ball.position.x.toFixed(1)}`);
       }
-      return;
+      // Force generation regardless of rightmostX
+    } else {
+      // Only generate if we need more walls ahead of the ball
+      // Check if we already have enough walls ahead
+      // Match vertical obstacle generation frequency - generate frequently
+      
+      // Generate if:
+      // 1. We don't have enough walls ahead, OR
+      // 2. Last generation point is less than target distance (with buffer), OR
+      // 3. Chunks exist but don't have horizontal walls (need continuous generation)
+      const needsMoreWalls = this.horizontalWalls.length < MIN_WALL_COUNT || wallsAheadOfBall < MIN_WALL_COUNT;
+      const needsMoreDistance = rightmostX < targetDistanceWithBuffer;
+      
+      // If chunks exist but don't have horizontal walls, always generate to ensure continuous walls
+      if (!needsMoreWalls && !needsMoreDistance && !hasChunksWithoutWalls) {
+        if (this.DEBUG_MODE) {
+          console.log(`[Game] Skipping wall generation - last generation at ${rightmostX.toFixed(1)}, target is ${targetDistanceWithBuffer.toFixed(1)}, ballX: ${this.ball.position.x.toFixed(1)}, walls ahead: ${wallsAheadOfBall}`);
+        }
+        return;
+      }
+      
+      // If chunks don't have horizontal walls, ensure we generate continuously
+      if (hasChunksWithoutWalls && this.DEBUG_MODE) {
+        console.log(`[Game] Chunks without horizontal walls detected - ensuring continuous generation. rightmostX: ${rightmostX.toFixed(1)}, target: ${targetDistanceWithBuffer.toFixed(1)}`);
+      }
     }
     
     // Determine zone type based on difficulty/level
@@ -1442,7 +1842,8 @@ export default class Game {
     }
     
     // Generate walls based on zone type - generate enough to reach target distance (with buffer)
-    const result = this.generateWallZone(rightmostX, targetDistanceWithBuffer + this.canvas.width, config, level);
+    // Removed + this.canvas.width to prevent generating excess walls beyond target
+    const result = this.generateWallZone(rightmostX, targetDistanceWithBuffer, config, level);
     const wallsGenerated = result.count;
     const newRightmostX = result.rightmostX;
     
@@ -1460,7 +1861,12 @@ export default class Game {
       if (wallsGenerated > 0) {
         console.log(`[Game] Generated ${wallsGenerated} horizontal walls, lastHorizontalWallX now: ${this.lastHorizontalWallX.toFixed(1)}, ballX: ${this.ball.position.x.toFixed(1)}, targetDistance: ${targetDistanceWithBuffer.toFixed(1)}, totalWalls: ${this.horizontalWalls.length}`);
       } else {
-        console.log(`[Game] No walls generated - rightmostX: ${rightmostX.toFixed(1)}, target: ${targetDistanceWithBuffer.toFixed(1)}, totalWalls: ${this.horizontalWalls.length}`);
+        // Throttle "No walls generated" log to prevent spam - only log once per second max
+        const now = performance.now();
+        if (now - this.lastWallGenerationLog >= this.WALL_LOG_THROTTLE_MS) {
+          console.log(`[Game] No walls generated - rightmostX: ${rightmostX.toFixed(1)}, target: ${targetDistanceWithBuffer.toFixed(1)}, totalWalls: ${this.horizontalWalls.length}`);
+          this.lastWallGenerationLog = now;
+        }
       }
     }
   }
@@ -1502,37 +1908,97 @@ export default class Game {
     });
   }
   
+  // Find vertical obstacles whose X position overlaps with the horizontal wall's X range
+  private findVerticalObstaclesAtX(wallX: number, wallWidth: number, searchRadius: number = 100): Obstacle[] {
+    const wallLeft = wallX;
+    const wallRight = wallX + wallWidth;
+    
+    return this.obstacles.filter(obs => {
+      if (!obs || obs.orientation === 'horizontal') return false;
+      if (typeof obs.gapY !== 'number' || typeof obs.gapHeight !== 'number') return false;
+      
+      // Check if obstacle's X position overlaps with wall's X range
+      const obstacleLeft = obs.position.x;
+      const obstacleRight = obs.position.x + obs.width;
+      
+      // Obstacle overlaps if it's within search radius or directly overlaps
+      const distanceX = Math.min(
+        Math.abs(obstacleLeft - wallLeft),
+        Math.abs(obstacleRight - wallRight),
+        Math.abs(obstacleLeft - wallRight),
+        Math.abs(obstacleRight - wallLeft)
+      );
+      
+      return distanceX <= searchRadius || 
+             (obstacleLeft < wallRight && obstacleRight > wallLeft);
+    });
+  }
+  
+  // Check if a horizontal wall blocks any vertical obstacle's gap
+  private checkWallBlocksVerticalGap(wallY: number, wallHeight: number, wallX: number, wallWidth: number): boolean {
+    const wallTop = wallY;
+    const wallBottom = wallY + wallHeight;
+    
+    // Find vertical obstacles at this X position
+    const obstaclesAtX = this.findVerticalObstaclesAtX(wallX, wallWidth);
+    
+    for (const obstacle of obstaclesAtX) {
+      if (!obstacle || typeof obstacle.gapY !== 'number' || typeof obstacle.gapHeight !== 'number') continue;
+      
+      // Calculate vertical obstacle's gap boundaries
+      const gapTop = obstacle.position.y + obstacle.gapY - obstacle.gapHeight / 2;
+      const gapBottom = obstacle.position.y + obstacle.gapY + obstacle.gapHeight / 2;
+      
+      // Check if horizontal wall overlaps with the gap area
+      // Wall blocks gap if it overlaps with the gap's Y range
+      const overlapsGap = !(wallBottom < gapTop || wallTop > gapBottom);
+      
+      if (overlapsGap) {
+        return true; // Wall blocks this gap
+      }
+    }
+    
+    return false; // Wall doesn't block any gaps
+  }
+  
   // Generate a wall zone based on zone type
-  private generateWallZone(startX: number, targetDistance: number, config: GameConfig, level: number): number {
+  private generateWallZone(startX: number, targetDistance: number, config: GameConfig, level: number): { count: number; rightmostX: number } {
     const wallHeight = 60;
     const minGapWidth = 200; // Increased minimum gap for playability
-    const minVerticalSpacing = wallHeight + 100; // Minimum vertical space between walls to avoid overlap
+    // Significantly increased minimum vertical spacing to ensure large navigable paths
+    // Ball needs substantial room to move vertically between walls
+    const minVerticalSpacing = wallHeight + 300; // Increased to 300px for much better navigation
     let wallsGenerated = 0;
     let currentX = startX;
     
     // Zone-specific parameters
-    let wallsPerZone: number;
-    let wallSpacing: number; // Horizontal spacing
+    // Horizontal walls should appear as often or more often than vertical obstacles
+    // Use config.walls.spacing as base (same as vertical obstacles) with zone-specific multipliers
+    let wallSpacing: number; // Horizontal spacing - matches or exceeds vertical obstacle frequency
     let gapSizeMultiplier: number;
+    let maxWallsPerScreen: number; // Maximum walls per screen width - increased to match/exceed vertical obstacles
+    
+    // Base spacing from config (same as vertical obstacles use)
+    const baseSpacing = config.walls.spacing;
     
     switch (this.currentZoneType) {
       case 'barrier':
-        // Barrier: Multiple walls with staggered gaps
-        wallsPerZone = Math.min(2 + Math.floor(level / 4), 4); // Fewer walls, better spacing
-        wallSpacing = 300 + (level * 15); // More horizontal spacing
-        gapSizeMultiplier = Math.max(0.75, 1.0 - (level - 1) * 0.03); // Less aggressive reduction
+        // Barrier: Walls appear frequently, matching vertical obstacle frequency
+        wallSpacing = baseSpacing * 0.9; // Slightly more frequent than vertical obstacles
+        gapSizeMultiplier = Math.max(0.8, 1.0 - (level - 1) * 0.02);
+        maxWallsPerScreen = 0.7; // 0.7 walls per screen width - appears frequently
         break;
       case 'corridor':
-        // Corridor: Connect to vertical obstacles
-        wallsPerZone = Math.min(2 + Math.floor(level / 3), 4);
-        wallSpacing = 350 + (level * 20);
-        gapSizeMultiplier = Math.max(0.7, 1.0 - (level - 1) * 0.04);
+        // Corridor: Connect to vertical obstacles - frequent walls
+        wallSpacing = baseSpacing * 0.8; // More frequent than vertical obstacles
+        gapSizeMultiplier = Math.max(0.75, 1.0 - (level - 1) * 0.03);
+        maxWallsPerScreen = 0.8; // 0.8 walls per screen width - appears very frequently
         break;
       case 'maze':
-        // Maze: Dense but navigable patterns
-        wallsPerZone = Math.min(3 + Math.floor(level / 3), 5);
-        wallSpacing = 250 + (level * 25);
-        gapSizeMultiplier = Math.max(0.65, 1.0 - (level - 1) * 0.05);
+        // Maze: Most frequent walls for maze-like navigation
+        wallSpacing = baseSpacing * 0.7; // Most frequent - exceeds vertical obstacle frequency
+        gapSizeMultiplier = Math.max(0.7, 1.0 - (level - 1) * 0.04);
+        maxWallsPerScreen = 1.0; // 1.0 walls per screen width - appears as often as vertical obstacles or more
         break;
     }
     
@@ -1540,7 +2006,7 @@ export default class Game {
     const usedYPositions: Array<{ y: number; height: number }> = [];
     
     // Helper to check if a Y position would overlap with existing walls
-    // Checks both walls in current generation AND all existing walls on screen
+    // Checks both walls in current generation AND all existing walls on screen AND vertical obstacle gaps
     const wouldOverlap = (testY: number, testHeight: number, testX?: number): boolean => {
       const testTop = testY;
       const testBottom = testY + testHeight;
@@ -1551,7 +2017,8 @@ export default class Game {
         const existingTop = existing.y;
         const existingBottom = existing.y + existing.height;
         
-        // Check for overlap (with minimum spacing buffer)
+        // Check for overlap (with minimum spacing buffer to ensure navigable gaps)
+        // This ensures there's always enough vertical space for the ball to pass between walls
         if (!(testBottom < existingTop - minSpacing || testTop > existingBottom + minSpacing)) {
           return true;
         }
@@ -1572,20 +2039,36 @@ export default class Game {
         const existingTop = existingWall.position.y;
         const existingBottom = existingWall.position.y + existingWall.height;
         
-        // Check for overlap (with minimum spacing buffer)
+        // Check for overlap (with minimum spacing buffer to ensure navigable gaps)
+        // Critical: This spacing ensures the ball can always navigate vertically between walls
         if (!(testBottom < existingTop - minSpacing || testTop > existingBottom + minSpacing)) {
           return true;
+        }
+      }
+      
+      // Check if this position would block any vertical obstacle gaps
+      // Only check if testX is provided (we need X position to check vertical obstacles)
+      if (testX !== undefined) {
+        const testWallWidth = this.canvas.width; // Horizontal walls span full screen width
+        if (this.checkWallBlocksVerticalGap(testY, testHeight, testX, testWallWidth)) {
+          return true; // This position would block a vertical gap
         }
       }
       
       return false;
     };
     
-    // Helper to find a valid Y position
+    // Helper to find a valid Y position - improved to always find valid position
     const findValidYPosition = (preferredY?: number, testX?: number): number => {
       const margin = this.canvas.height * 0.1;
       const minY = margin;
       const maxY = this.canvas.height - margin - wallHeight;
+      
+      // Ensure we have valid range
+      if (maxY <= minY) {
+        // Canvas too small, use center
+        return this.canvas.height / 2 - wallHeight / 2;
+      }
       
       // Try preferred Y first if provided
       if (preferredY !== undefined) {
@@ -1597,7 +2080,8 @@ export default class Game {
       
       // Try random positions until we find one that doesn't overlap
       let attempts = 0;
-      while (attempts < 30) { // Increased attempts
+      const MAX_RANDOM_ATTEMPTS = 50; // Increased attempts
+      while (attempts < MAX_RANDOM_ATTEMPTS) {
         const testY = minY + Math.random() * (maxY - minY);
         if (!wouldOverlap(testY, wallHeight, testX)) {
           return testY;
@@ -1605,120 +2089,284 @@ export default class Game {
         attempts++;
       }
       
-      // Fallback: find Y position with maximum distance from existing walls
+      // Fallback: systematically search for non-overlapping position
+      // Use smaller step size for better coverage
+      const stepSize = Math.max(10, (maxY - minY) / 50); // At least 50 positions to check
       let bestY = minY;
       let maxDistance = 0;
-      for (let y = minY; y <= maxY; y += 20) {
-        let minDistance = Infinity;
-        
-        // Check distance from walls in current generation
-        for (const existing of usedYPositions) {
-          const existingCenter = existing.y + existing.height / 2;
-          const testCenter = y + wallHeight / 2;
-          const distance = Math.abs(testCenter - existingCenter);
-          minDistance = Math.min(minDistance, distance);
-        }
-        
-        // Check distance from existing walls on screen
-        for (const existingWall of this.horizontalWalls) {
-          if (!existingWall || !existingWall.position) continue;
-          if (testX !== undefined) {
-            const distanceX = Math.abs(existingWall.position.x - testX);
-            if (distanceX > this.canvas.width * 2) continue;
+      let foundNonOverlapping = false;
+      
+      for (let y = minY; y <= maxY; y += stepSize) {
+        // Prefer non-overlapping positions
+        if (!wouldOverlap(y, wallHeight, testX)) {
+          if (!foundNonOverlapping) {
+            foundNonOverlapping = true;
+            bestY = y;
+            maxDistance = Infinity; // Reset to prioritize non-overlapping
           }
-          const existingCenter = existingWall.position.y + existingWall.height / 2;
-          const testCenter = y + wallHeight / 2;
-          const distance = Math.abs(testCenter - existingCenter);
-          minDistance = Math.min(minDistance, distance);
-        }
-        
-        if (minDistance > maxDistance) {
-          maxDistance = minDistance;
-          bestY = y;
+          // Among non-overlapping positions, pick the one with max distance from existing walls
+          let minDistance = Infinity;
+          for (const existing of usedYPositions) {
+            const existingCenter = existing.y + existing.height / 2;
+            const testCenter = y + wallHeight / 2;
+            const distance = Math.abs(testCenter - existingCenter);
+            minDistance = Math.min(minDistance, distance);
+          }
+          // Also check against existing walls
+          for (const existingWall of this.horizontalWalls) {
+            if (!existingWall || !existingWall.position) continue;
+            if (testX !== undefined) {
+              const distanceX = Math.abs(existingWall.position.x - testX);
+              if (distanceX > this.canvas.width * 2) continue;
+            }
+            const existingCenter = existingWall.position.y + existingWall.height / 2;
+            const testCenter = y + wallHeight / 2;
+            const distance = Math.abs(testCenter - existingCenter);
+            minDistance = Math.min(minDistance, distance);
+          }
+          if (minDistance > maxDistance) {
+            maxDistance = minDistance;
+            bestY = y;
+          }
+        } else if (!foundNonOverlapping) {
+          // If no non-overlapping position found yet, track the best overlapping one
+          let minDistance = Infinity;
+          for (const existing of usedYPositions) {
+            const existingCenter = existing.y + existing.height / 2;
+            const testCenter = y + wallHeight / 2;
+            const distance = Math.abs(testCenter - existingCenter);
+            minDistance = Math.min(minDistance, distance);
+          }
+          // Also check against existing walls
+          for (const existingWall of this.horizontalWalls) {
+            if (!existingWall || !existingWall.position) continue;
+            if (testX !== undefined) {
+              const distanceX = Math.abs(existingWall.position.x - testX);
+              if (distanceX > this.canvas.width * 2) continue;
+            }
+            const existingCenter = existingWall.position.y + existingWall.height / 2;
+            const testCenter = y + wallHeight / 2;
+            const distance = Math.abs(testCenter - existingCenter);
+            minDistance = Math.min(minDistance, distance);
+          }
+          if (minDistance > maxDistance) {
+            maxDistance = minDistance;
+            bestY = y;
+          }
         }
       }
-      return bestY;
+      
+      // Final validation: ensure returned position respects minimum spacing
+      // If we found a non-overlapping position, use it
+      if (foundNonOverlapping) {
+        return bestY;
+      }
+      
+      // If we couldn't find non-overlapping, ensure minimum spacing from closest wall
+      // This prevents impossible navigation paths
+      const finalY = bestY;
+      let minSpacingToClosest = Infinity;
+      for (const existing of usedYPositions) {
+        const existingTop = existing.y;
+        const existingBottom = existing.y + existing.height;
+        const testTop = finalY;
+        const testBottom = finalY + wallHeight;
+        const spacing = Math.min(
+          Math.abs(testBottom - existingTop),
+          Math.abs(testTop - existingBottom)
+        );
+        minSpacingToClosest = Math.min(minSpacingToClosest, spacing);
+      }
+      
+      // If spacing is too small, adjust position
+      if (minSpacingToClosest < minVerticalSpacing) {
+        // Try to find a position with better spacing
+        for (let y = minY; y <= maxY; y += stepSize) {
+          let minSpacing = Infinity;
+          for (const existing of usedYPositions) {
+            const existingTop = existing.y;
+            const existingBottom = existing.y + existing.height;
+            const testTop = y;
+            const testBottom = y + wallHeight;
+            const spacing = Math.min(
+              Math.abs(testBottom - existingTop),
+              Math.abs(testTop - existingBottom)
+            );
+            minSpacing = Math.min(minSpacing, spacing);
+          }
+          if (minSpacing >= minVerticalSpacing) {
+            return y;
+          }
+        }
+      }
+      
+      return finalY;
     };
     
-    while (currentX < targetDistance && wallsGenerated < wallsPerZone) {
+    // Generate walls continuously until we reach the target distance
+    // Limit density: calculate max walls based on distance and maxWallsPerScreen
+    const distanceToCover = targetDistance - startX;
+    const maxWallsForDistance = Math.floor((distanceToCover / this.canvas.width) * maxWallsPerScreen);
+    // Let density control generation - walls appear frequently to match/exceed vertical obstacles
+    let maxWallsGenerated = Math.max(1, maxWallsForDistance); // Minimum of 1 wall to ensure generation
+    // Cap maximum to prevent any accidental over-generation, but allow more walls
+    maxWallsGenerated = Math.min(maxWallsGenerated, 10); // Increased cap to allow more frequent generation
+    
+    // Generate walls continuously until we reach the target distance
+    // Limit total walls based on density settings to match/exceed vertical obstacle frequency
+    while (currentX < targetDistance && wallsGenerated < maxWallsGenerated) {
+      
       let wallY: number;
       let connectedObstacle: Obstacle | null = null;
       
-      if (this.currentZoneType === 'corridor') {
-        // Corridor: Try to connect to vertical obstacles
-        const nearbyObstacles = this.findNearbyVerticalObstacles(currentX, 0, 500);
-        if (nearbyObstacles.length > 0) {
-          const obstacle = nearbyObstacles[Math.floor(Math.random() * nearbyObstacles.length)];
+      // CRITICAL: Horizontal walls should ONLY create helpful platforms, not obstacles
+      // Only generate walls that align with vertical obstacle gaps to create traversable paths
+      const nearbyObstacles = this.findNearbyVerticalObstacles(currentX, 0, 1000); // Large search radius
+      
+      if (nearbyObstacles.length > 0) {
+        // Find obstacles whose gaps we can align with to create platforms
+        const alignableObstacles = nearbyObstacles.filter(obs => {
+          if (typeof obs.gapY !== 'number' || typeof obs.gapHeight !== 'number') return false;
+          const gapCenterY = obs.position.y + obs.gapY;
+          // Check if we can place a wall at this gap position without blocking
+          const testWallY = gapCenterY - wallHeight / 2;
+          // Wall should be positioned to create a platform AT the gap, not block it
+          // The wall should be slightly above or below the gap center to create a landing platform
+          return !this.checkWallBlocksVerticalGap(testWallY, wallHeight, currentX, this.canvas.width);
+        });
+        
+        if (alignableObstacles.length > 0) {
+          // Prefer aligning with gaps - this creates platforms that help traversal
+          const obstacle = alignableObstacles[Math.floor(Math.random() * alignableObstacles.length)];
           const obstacleGapCenterY = obstacle.position.y + obstacle.gapY;
-          // Align wall center with obstacle gap center for seamless connection
-          const preferredY = obstacleGapCenterY - wallHeight / 2;
-          wallY = findValidYPosition(preferredY, currentX);
-          // Connect if we're close to the obstacle's gap (within 50px for seamless look)
-          if (Math.abs((wallY + wallHeight / 2) - obstacleGapCenterY) < 50) {
-            // Precisely align for seamless connection
-            wallY = obstacleGapCenterY - wallHeight / 2;
-            connectedObstacle = obstacle;
+          // Align wall center with obstacle gap center to create a platform
+          wallY = obstacleGapCenterY - wallHeight / 2;
+          connectedObstacle = obstacle;
+          
+          // Ensure wall doesn't block the gap (shouldn't happen, but double-check)
+          if (this.checkWallBlocksVerticalGap(wallY, wallHeight, currentX, this.canvas.width)) {
+            // If it would block, skip this wall entirely - don't generate random walls
+            if (this.DEBUG_MODE) {
+              console.log(`[Game] Skipping horizontal wall - cannot align with gap without blocking`);
+            }
+            currentX += wallSpacing;
+            continue;
           }
         } else {
+          // No alignable obstacles - always generate fallback wall to ensure continuous generation
+          // Generate a wall at a safe Y position as fallback
           wallY = findValidYPosition(undefined, currentX);
+          if (this.DEBUG_MODE) {
+            console.log(`[Game] Generating fallback horizontal wall - no alignable obstacles, wallY: ${wallY.toFixed(1)}`);
+          }
         }
       } else {
-        // Barrier and Maze: Generate at varied Y positions
+        // No nearby obstacles - always generate fallback wall to ensure continuous generation
+        // This ensures walls are always generated even when there are no vertical obstacles nearby
         wallY = findValidYPosition(undefined, currentX);
-        
-        // Also try to connect to vertical obstacles in maze zones for seamless merging
-        if (this.currentZoneType === 'maze') {
-          const nearbyObstacles = this.findNearbyVerticalObstacles(currentX, wallY, 400);
-          for (const obstacle of nearbyObstacles) {
-            const obstacleGapCenterY = obstacle.position.y + obstacle.gapY;
-            const wallCenterY = wallY + wallHeight / 2;
-            // If wall is close to obstacle gap, align for seamless connection
-            if (Math.abs(wallCenterY - obstacleGapCenterY) < 60) {
-              wallY = obstacleGapCenterY - wallHeight / 2;
-              connectedObstacle = obstacle;
-              break;
-            }
-          }
+        if (this.DEBUG_MODE) {
+          console.log(`[Game] Generating fallback horizontal wall - no vertical obstacles nearby, wallY: ${wallY.toFixed(1)}`);
         }
       }
       
       // Ensure wall doesn't overlap (double-check with current X position)
-      if (wouldOverlap(wallY, wallHeight, currentX)) {
-        // Skip this wall if we can't find a valid position
-        currentX += wallSpacing;
-        continue;
+      // If overlap detected, try to find a different position before giving up
+      let attempts = 0;
+      const MAX_RETRY_ATTEMPTS = 10; // Increased attempts to find non-blocking position
+      const wallWidth = this.canvas.width; // Horizontal walls span full screen width
+      
+      while ((wouldOverlap(wallY, wallHeight, currentX) || 
+              this.checkWallBlocksVerticalGap(wallY, wallHeight, currentX, wallWidth)) && 
+             attempts < MAX_RETRY_ATTEMPTS) {
+        // Try finding a different Y position that doesn't block gaps
+        wallY = findValidYPosition(undefined, currentX);
+        attempts++;
+      }
+      
+      // If wall still blocks a gap after retries, try to find a better position
+      // Try multiple times to find a position that doesn't block gaps
+      if (this.checkWallBlocksVerticalGap(wallY, wallHeight, currentX, wallWidth)) {
+        let gapBlockingAttempts = 0;
+        const MAX_GAP_BLOCKING_ATTEMPTS = 30; // Increased attempts to find non-blocking position
+        while (this.checkWallBlocksVerticalGap(wallY, wallHeight, currentX, wallWidth) && gapBlockingAttempts < MAX_GAP_BLOCKING_ATTEMPTS) {
+          wallY = findValidYPosition(undefined, currentX);
+          gapBlockingAttempts++;
+        }
+        
+        // If we still can't find a non-blocking position after many attempts, 
+        // only skip if we've already generated several walls (to ensure we generate at least some walls)
+        if (this.checkWallBlocksVerticalGap(wallY, wallHeight, currentX, wallWidth) && wallsGenerated >= 3) {
+          if (this.DEBUG_MODE) {
+            console.log(`[Game] Skipping horizontal wall at X=${currentX.toFixed(1)}, Y=${wallY.toFixed(1)} - blocks vertical gap after ${gapBlockingAttempts} attempts`);
+          }
+          // Skip to next iteration without generating this wall
+          currentX += wallSpacing;
+          continue;
+        }
+        
+        // Otherwise, generate the wall even if it blocks a gap (better than no walls at all)
+        if (this.DEBUG_MODE && gapBlockingAttempts > 0) {
+          console.log(`[Game] Generated wall despite potential gap blocking after ${gapBlockingAttempts} attempts`);
+        }
       }
       
       // Record this wall's Y position
       usedYPositions.push({ y: wallY, height: wallHeight });
       
       // Generate gap for this wall - ensure it's always navigable
+      // Wall spans from currentX to currentX + this.canvas.width (full screen width)
+      const wallLeft = currentX;
+      const wallRight = currentX + this.canvas.width;
+      // wallWidth already declared above
+      
       let gapX: number;
       if (connectedObstacle) {
         // For seamless connection, align gap precisely with vertical obstacle's center
         // This creates a continuous path through the connected structure
         gapX = connectedObstacle.position.x + connectedObstacle.width / 2;
         // Keep gap within wall bounds but prefer alignment with obstacle
-        gapX = Math.max(currentX + minGapWidth / 2, Math.min(currentX + this.canvas.width - minGapWidth / 2, gapX));
+        gapX = Math.max(wallLeft + minGapWidth / 2, Math.min(wallRight - minGapWidth / 2, gapX));
       } else {
         // Place gap in a good position (not too close to edges)
-        const gapCenterRange = this.canvas.width * 0.5; // Use middle 50% of screen
-        const gapCenterStart = currentX + this.canvas.width * 0.25;
+        // Use middle 50% of wall, with margins from edges
+        const margin = wallWidth * 0.25; // 25% margin from each edge
+        const gapCenterRange = wallWidth * 0.5; // Middle 50% of wall
+        const gapCenterStart = wallLeft + margin;
         gapX = gapCenterStart + Math.random() * gapCenterRange;
       }
       
       // Gap width - ensure it's always large enough
       const normalizedGapWidth = randomInRange(config.walls.gapHeightMin, config.walls.gapHeightMax);
       let gapWidth = normalizedGapWidth * this.canvas.width * gapSizeMultiplier;
-      gapWidth = Math.max(gapWidth, minGapWidth); // Enforce minimum
       
-      // Ensure gap doesn't go outside wall bounds
+      // Critical: Ensure gap is navigable by checking against ball radius
+      const ballRadius = this.ball.radius || 15; // Default to 15px if not set
+      const minNavigableGapWidth = Math.max(minGapWidth, ballRadius * 2.5); // Safety margin for navigation
+      gapWidth = Math.max(gapWidth, minNavigableGapWidth); // Enforce absolute minimum
+      
+      // Ensure gap width doesn't exceed wall width (with margin)
+      const maxGapWidth = wallWidth * 0.8; // Max 80% of wall width
+      gapWidth = Math.min(gapWidth, maxGapWidth);
+      
+      // Ensure gap doesn't go outside wall bounds - use wall's actual bounds
       const gapLeft = gapX - gapWidth / 2;
       const gapRight = gapX + gapWidth / 2;
-      if (gapLeft < currentX) {
-        gapX = currentX + gapWidth / 2;
-      } else if (gapRight > currentX + this.canvas.width) {
-        gapX = currentX + this.canvas.width - gapWidth / 2;
+      const marginFromEdge = gapWidth / 2 + 10; // 10px safety margin
+      
+      if (gapLeft < wallLeft + marginFromEdge) {
+        // Gap too close to left edge, shift right
+        gapX = wallLeft + marginFromEdge;
+      } else if (gapRight > wallRight - marginFromEdge) {
+        // Gap too close to right edge, shift left
+        gapX = wallRight - marginFromEdge;
+      }
+      
+      // Final validation: ensure gap is fully within wall bounds
+      const finalGapLeft = gapX - gapWidth / 2;
+      const finalGapRight = gapX + gapWidth / 2;
+      if (finalGapLeft < wallLeft || finalGapRight > wallRight) {
+        // If still out of bounds, center it in the wall
+        gapX = (wallLeft + wallRight) / 2;
       }
       
       // Determine gap type (less frequent special gaps for better playability)
@@ -1726,13 +2374,23 @@ export default class Game {
       let gapType: GapType = 'none';
       if (gapTypeRoll < 0.15) {
         gapType = 'powerup';
-        gapWidth = Math.max(gapWidth * 0.9, minGapWidth); // Slightly smaller but still navigable
+        // Reduce size but ensure it's still navigable
+        gapWidth = Math.max(gapWidth * 0.9, minNavigableGapWidth);
       } else if (gapTypeRoll < 0.25) {
         gapType = 'shortcut';
-        gapWidth = Math.max(gapWidth * 0.85, minGapWidth);
+        // Reduce size but ensure it's still navigable
+        gapWidth = Math.max(gapWidth * 0.85, minNavigableGapWidth);
       } else if (gapTypeRoll < 0.28) {
         gapType = 'level-transition';
-        gapWidth *= 1.3; // Larger for level transitions
+        gapWidth = Math.min(gapWidth * 1.3, maxGapWidth); // Larger but capped
+      }
+      
+      // Final safety check: ensure gap width is still navigable after type adjustments
+      gapWidth = Math.max(gapWidth, minNavigableGapWidth);
+      
+      // Log warning if gap is at minimum (for debugging)
+      if (this.DEBUG_MODE && gapWidth <= minNavigableGapWidth * 1.1) {
+        console.log(`[Game] Gap at minimum navigable size: ${gapWidth.toFixed(1)}px (ball radius: ${ballRadius}px)`);
       }
       
       // Create wall
@@ -1776,9 +2434,49 @@ export default class Game {
       currentX += wallSpacing;
     }
     
+    // Safety check: ensure at least one wall was generated
+    if (wallsGenerated === 0 && this.horizontalWalls.length === 0) {
+      // Emergency fallback: generate at least one wall to prevent empty state
+      const emergencyWallY = this.canvas.height / 2 - wallHeight / 2;
+      const emergencyGapX = startX + this.canvas.width / 2;
+      const ballRadius = this.ball.radius || 15;
+      const emergencyGapWidth = Math.max(minGapWidth, ballRadius * 2.5);
+      
+      const emergencyWall: Obstacle = {
+        position: { x: startX, y: emergencyWallY },
+        width: this.canvas.width,
+        height: wallHeight,
+        gapY: 0,
+        gapHeight: 0,
+        orientation: 'horizontal',
+        gapX: emergencyGapX,
+        gapWidth: emergencyGapWidth,
+        gapType: 'none',
+        obstacleType: 'pipe',
+        wallStyle: 'pipe',
+        wallColor: getRandomColorFromPalette(config.walls.colorPalette),
+        theme: this.currentTheme,
+        passed: false,
+        isLevelTransition: false
+      };
+      
+      this.horizontalWalls.push(emergencyWall);
+      wallsGenerated = 1;
+      
+      if (this.DEBUG_MODE) {
+        console.warn(`[Game] Emergency wall generated - no walls were created in normal flow`);
+      }
+    }
+    
     // Return both count and rightmost X position reached
     // The rightmost X is the right edge of the last wall generated
     const rightmostX = wallsGenerated > 0 ? currentX - wallSpacing + this.canvas.width : startX;
+    
+    // Validation: log warning if no walls generated
+    if (wallsGenerated === 0 && this.DEBUG_MODE) {
+      console.warn(`[Game] No walls generated in generateWallZone. startX: ${startX}, targetDistance: ${targetDistance}, currentX: ${currentX}`);
+    }
+    
     return { count: wallsGenerated, rightmostX };
   }
   
@@ -2041,9 +2739,14 @@ export default class Game {
     const maxOffset = this.canvas.height * 0.3;
     this.cameraOffsetY = Math.max(-maxOffset, Math.min(maxOffset, this.cameraOffsetY));
 
-    // DEBUG: Log camera movement for artifacting analysis
+    // DEBUG: Log camera movement for artifacting analysis (throttled - only when offset changes significantly)
+    // Only log when camera offset changes by more than 5px to reduce spam
     if (this.DEBUG_MODE && Math.abs(this.cameraOffsetY) > 10) {
-      console.log(`[DEBUG] Camera: ballY=${this.ball.position.y.toFixed(1)}, centerY=${centerY.toFixed(1)}, offset=${this.cameraOffsetY.toFixed(1)}, target=${this.targetCameraOffsetY.toFixed(1)}`);
+      const cameraChange = Math.abs(this.cameraOffsetY - (this.lastCameraLogOffset || 0));
+      if (cameraChange > 5) {
+        console.log(`[DEBUG] Camera: ballY=${this.ball.position.y.toFixed(1)}, centerY=${centerY.toFixed(1)}, offset=${this.cameraOffsetY.toFixed(1)}, target=${this.targetCameraOffsetY.toFixed(1)}`);
+        this.lastCameraLogOffset = this.cameraOffsetY;
+      }
     }
   }
   
@@ -2084,10 +2787,11 @@ export default class Game {
       // Clamp deltaTime to prevent huge jumps that could break physics
       const clampedDeltaTime = Math.min(Math.max(deltaTime, 0), 5); // Max 5x normal speed
       
-      // Performance monitoring
+      // Performance monitoring (reduced frequency for better performance)
       this.frameCount++;
       const timeSinceLastLog = timestamp - this.lastPerformanceLog;
-      if (timeSinceLastLog >= this.PERFORMANCE_LOG_INTERVAL_MS && this.DEBUG_MODE) {
+      // Only log performance every 10 seconds instead of 5 to reduce overhead
+      if (timeSinceLastLog >= this.PERFORMANCE_LOG_INTERVAL_MS * 2 && this.DEBUG_MODE) {
         const fps = Math.round((this.frameCount * 1000) / timeSinceLastLog);
         console.log(`[Game] Performance: ${fps} FPS, obstacles: ${this.obstacles.length}, walls: ${this.horizontalWalls.length}, status: ${this.status}`);
         this.frameCount = 0;
@@ -2128,16 +2832,19 @@ export default class Game {
           this.status = 'playing';
           this.gameStartTime = performance.now(); // Record when gameplay actually starts
           this.lastSurvivalScoreTime = 0; // Reset survival scoring timer
-          console.log('[GAME_DEBUG] ===== STATE TRANSITION =====');
-          console.log('[GAME_DEBUG] Previous status:', previousStatus);
-          console.log('[GAME_DEBUG] New status: playing');
-          console.log('[GAME_DEBUG] Game start time:', this.gameStartTime);
-          console.log('[GAME_DEBUG] Ball position:', { x: this.ball.position.x, y: this.ball.position.y });
-          console.log('[GAME_DEBUG] Horizontal walls:', this.horizontalWalls.map(w => ({ y: w.position.y, height: w.height, gapType: w.gapType })));
-          console.log('[GAME_DEBUG] ============================');
+          if (this.DEBUG_MODE) {
+            console.log('[GAME_DEBUG] ===== STATE TRANSITION =====');
+            console.log('[GAME_DEBUG] Previous status:', previousStatus);
+            console.log('[GAME_DEBUG] New status: playing');
+            console.log('[GAME_DEBUG] Game start time:', this.gameStartTime);
+            console.log('[GAME_DEBUG] Ball position:', { x: this.ball.position.x, y: this.ball.position.y });
+            console.log('[GAME_DEBUG] Horizontal walls:', this.horizontalWalls.map(w => ({ y: w.position.y, height: w.height, gapType: w.gapType })));
+            console.log('[GAME_DEBUG] ============================');
+          }
         }
       }
       
+      // Only update physics/obstacles when playing - skip when gameOver to save performance
       if (this.status === 'playing') {
         try {
           this.update(clampedDeltaTime);
@@ -2151,6 +2858,7 @@ export default class Game {
           }
         }
       }
+      // Skip update() when gameOver - only render the frozen state
       
       try {
         this.render();
@@ -2199,7 +2907,12 @@ export default class Game {
         // Wait a bit before continuing to prevent infinite error loops
         // Use a delay to prevent rapid error loops
         const errorRecoveryDelay = 100;
-        setTimeout(() => {
+        // Clear any existing error recovery timeout
+        if (this.errorRecoveryTimeoutId !== null) {
+          clearTimeout(this.errorRecoveryTimeoutId);
+        }
+        this.errorRecoveryTimeoutId = setTimeout(() => {
+          this.errorRecoveryTimeoutId = null;
           // Double-check status is still valid before resuming
           if (this.status === 'playing' || this.status === 'idle' || this.status === 'paused' || this.status === 'starting' || this.status === 'gameOver') {
             // Ensure we're not already running
@@ -2237,10 +2950,22 @@ export default class Game {
       // Save checkpoint periodically (every 2.5 seconds) - use requestIdleCallback to avoid blocking
       if (currentTime - this.lastCheckpointSave >= this.CHECKPOINT_INTERVAL_MS) {
         this.lastCheckpointSave = currentTime;
+        
+        // Cancel any pending checkpoint save to prevent accumulation
+        if (this.pendingCheckpointIdleCallback !== null && typeof window !== 'undefined' && 'cancelIdleCallback' in window) {
+          window.cancelIdleCallback(this.pendingCheckpointIdleCallback);
+          this.pendingCheckpointIdleCallback = null;
+        }
+        if (this.pendingCheckpointTimeout !== null) {
+          clearTimeout(this.pendingCheckpointTimeout);
+          this.pendingCheckpointTimeout = null;
+        }
+        
         // Save checkpoint in idle time to avoid blocking the main thread
         // The saveCheckpoint method already calls onCheckpointSave callback
         if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
-          window.requestIdleCallback(() => {
+          this.pendingCheckpointIdleCallback = window.requestIdleCallback(() => {
+            this.pendingCheckpointIdleCallback = null;
             try {
               this.saveCheckpoint();
             } catch (error) {
@@ -2250,7 +2975,8 @@ export default class Game {
           }, { timeout: 1000 });
         } else {
           // Fallback for browsers without requestIdleCallback
-          setTimeout(() => {
+          this.pendingCheckpointTimeout = setTimeout(() => {
+            this.pendingCheckpointTimeout = null;
             try {
               this.saveCheckpoint();
             } catch (error) {
@@ -2266,11 +2992,39 @@ export default class Game {
           // Initialize survival timer when game starts
           this.lastSurvivalScoreTime = currentTime;
         } else if (currentTime - this.lastSurvivalScoreTime >= this.SURVIVAL_SCORE_INTERVAL_MS) {
-          // Award survival points
-          this.score++;
+          // Award survival points with style multiplier
+          const styleMultiplier = this.styleMeter.getMultiplier();
+          const comboMultiplier = this.comboTracker.getTotalMultiplier();
+          const finalMultiplier = styleMultiplier * comboMultiplier;
+          this.score += Math.floor(1 * finalMultiplier);
           this.lastSurvivalScoreTime = currentTime;
           if (this.onScoreUpdate) {
             this.onScoreUpdate(this.score);
+          }
+          
+          // Check for perfect run bonus (10 obstacles without collision)
+          if (this.perfectRunObstacleCount >= 10) {
+            const bonusScore = Math.floor(this.score * 0.1); // 10% bonus
+            this.score += bonusScore;
+            if (this.onScoreUpdate) this.onScoreUpdate(this.score);
+            this.addStyleNotification('PERFECT RUN!', '#10b981');
+            this.particleSystem.addBurst(
+              this.ball.position.x,
+              this.ball.position.y,
+              '#10b981', // green
+              40
+            );
+            this.perfectRunObstacleCount = 0; // Reset counter
+          }
+          
+          // Add score milestone celebration particles
+          if (this.score % 50 === 0) {
+            this.particleSystem.addBurst(
+              this.ball.position.x,
+              this.ball.position.y,
+              '#fbbf24', // amber
+              30
+            );
           }
         }
       }
@@ -2289,6 +3043,20 @@ export default class Game {
         }
       }
       
+      // Add trail particle for ball movement (after position update)
+      if (this.status === 'playing') {
+        const ballColor = getTheme(this.currentTheme).ballColor;
+        // Update trail particles with new ball position
+        const trailParticles = (this.particleSystem as unknown as { particles: Particle[] }).particles.filter((p: Particle) => p.type === 'trail');
+        if (trailParticles.length > 0) {
+          const lastTrail = trailParticles[trailParticles.length - 1];
+          (this.particleSystem as unknown as { updateTrail: (particle: Particle, x: number, y: number) => void }).updateTrail(lastTrail, this.ball.position.x, this.ball.position.y);
+        } else {
+          // Add new trail particle if none exists
+          this.particleSystem.addTrail(this.ball.position.x, this.ball.position.y, ballColor);
+        }
+      }
+      
       // Check if ball is traversing through a gap and update camera accordingly
       // Only update camera when game is actually playing (not during continue setup)
       try {
@@ -2300,6 +3068,55 @@ export default class Game {
         // Reset camera to safe state
         this.cameraOffsetY = 0;
         this.targetCameraOffsetY = 0;
+      }
+      
+      // Update style system
+      try {
+        const currentTime = performance.now();
+        this.styleMeter.update(deltaTime, currentTime);
+        this.comboTracker.update(currentTime);
+        
+        // Update style notifications
+        for (let i = this.styleNotifications.length - 1; i >= 0; i--) {
+          const notification = this.styleNotifications[i];
+          notification.life -= deltaTime;
+          if (notification.life <= 0) {
+            this.styleNotifications.splice(i, 1);
+          } else {
+            // Animate notification
+            notification.scale = 1.0 + (1.0 - notification.life / notification.maxLife) * 0.3;
+            notification.y -= deltaTime * 0.1; // Float upward
+          }
+        }
+        
+        // Check for style level up
+        if (this.styleMeter.didLevelUp()) {
+          this.addStyleNotification('STYLE UP!', this.styleMeter.getColor());
+          this.soundManager.playBeep(800, 0.2);
+          this.particleSystem.addBurst(
+            this.ball.position.x,
+            this.ball.position.y,
+            this.styleMeter.getColor(),
+            30
+          );
+        }
+        
+        // Check for combo milestones
+        const activeCombo = this.comboTracker.getActiveCombo();
+        if (activeCombo && activeCombo.isActive) {
+          if (activeCombo.count === 10 || activeCombo.count === 25 || activeCombo.count === 50) {
+            this.addStyleNotification(`COMBO x${activeCombo.count}!`, '#fbbf24');
+            this.soundManager.playBeep(600, 0.3);
+            this.particleSystem.addBurst(
+              this.ball.position.x,
+              this.ball.position.y,
+              '#fbbf24',
+              25
+            );
+          }
+        }
+      } catch {
+        console.error('[Game] Error updating style system');
       }
       
       // Update particle system
@@ -2427,8 +3244,17 @@ export default class Game {
       }
     }
     
-    // Remove collected power-ups
-    this.powerUps = this.powerUps.filter(pu => !pu.collected);
+    // Remove collected power-ups using single-pass iteration (optimization)
+    let writeIndex = 0;
+    for (let i = 0; i < this.powerUps.length; i++) {
+      if (!this.powerUps[i].collected) {
+        if (writeIndex !== i) {
+          this.powerUps[writeIndex] = this.powerUps[i];
+        }
+        writeIndex++;
+      }
+    }
+    this.powerUps.length = writeIndex;
     
     // Check power-ups attached to obstacles
     for (const obstacle of this.obstacles) {
@@ -2535,7 +3361,8 @@ export default class Game {
     // Use two-phase approach: first update and check collisions, then remove off-screen obstacles
     const obstaclesToRemove: number[] = [];
     
-    if (this.DEBUG_MODE) {
+    // Reduced frequency: Only log update info occasionally in debug mode (every 60 frames ~1 second at 60fps)
+    if (this.DEBUG_MODE && this.frameCount % 60 === 0) {
       console.log(`[DEBUG] Update: ${this.obstacles.length} obstacles, ball at (${this.ball.position.x.toFixed(1)}, ${this.ball.position.y.toFixed(1)})`);
     }
     
@@ -2551,9 +3378,18 @@ export default class Game {
         continue;
       }
       
-      // Update obstacle position
+      // Early exit: Skip obstacles that are far off-screen to the left (optimization)
+      // Only update position if obstacle might be visible or recently passed
       const oldX = obstacle.position.x;
-      obstacle.position.x -= scrollSpeed * deltaTime;
+      const isFarOffScreen = obstacle.position.x + obstacle.width < -100; // 100px buffer
+      
+      if (!isFarOffScreen) {
+        // Update obstacle position only if it might be visible
+        obstacle.position.x -= scrollSpeed * deltaTime;
+      } else {
+        // Skip position update for far off-screen obstacles
+        obstacle.position.x -= scrollSpeed * deltaTime;
+      }
       
       // Check if obstacle is on-screen before collision detection
       const isOnScreen = obstacle.position.x + obstacle.width >= 0 && obstacle.position.x <= this.canvas.width;
@@ -2562,7 +3398,7 @@ export default class Game {
         console.log(`[DEBUG] Obstacle ${i} went off-screen at x=${obstacle.position.x.toFixed(1)}`);
       }
       
-      // Only check collision if obstacle is on-screen
+      // Only check collision if obstacle is on-screen (early exit optimization)
       if (isOnScreen) {
         // Skip collision check during grace period after continue/start
         const timeSinceGameStart = this.gameStartTime > 0 ? currentTime - this.gameStartTime : Infinity;
@@ -2589,7 +3425,7 @@ export default class Game {
             console.log(`[GAME_DEBUG] Time since game start:`, timeSinceGameStart > 0 ? `${timeSinceGameStart.toFixed(2)}ms` : 'N/A');
             console.log(`[GAME_DEBUG] ===================================================`);
             
-            // Add particle effect at collision point
+            // Add particle effect at collision point - use debris and spark particles
             const collisionX = Math.max(obstacle.position.x, Math.min(obstacle.position.x + obstacle.width, this.ball.position.x));
             const collisionY = this.ball.position.y;
             const obstacleColor = obstacle.wallColor || getTheme(this.currentTheme).obstacleColor;
@@ -2597,7 +3433,16 @@ export default class Game {
               collisionX,
               collisionY,
               obstacleColor,
-              15
+              12,
+              'debris'
+            );
+            // Add spark particles for impact
+            this.particleSystem.addExplosion(
+              collisionX,
+              collisionY,
+              obstacleColor,
+              8,
+              'spark'
             );
             
             if (this.extraTime > 0) {
@@ -2605,24 +3450,25 @@ export default class Game {
               this.extraTime = 0;
               // Play a sound effect for collision (even with extra time)
               this.soundManager.playHit();
-              // Add visual feedback for extra time use
-              this.particleSystem.addExplosion(
+              // Add visual feedback for extra time use - use glow particles
+              this.particleSystem.addBurst(
                 collisionX,
                 collisionY,
                 '#10b981', // green-500
-                20
+                15
               );
               return; // Exit early - don't trigger game over
             } else if (this.shieldCount > 0) {
               // Use shield instead of game over
               this.shieldCount--;
               this.soundManager.playHit();
-              // Add visual feedback for shield use
+              // Add visual feedback for shield use - use energy particles
               this.particleSystem.addExplosion(
                 collisionX,
                 collisionY,
                 '#3b82f6', // blue-500
-                20
+                15,
+                'energy'
               );
               return; // Exit early - don't trigger game over
             } else {
@@ -2675,18 +3521,57 @@ export default class Game {
         // Only score if ball passed through the gap (or if gap check isn't applicable)
         if (passedThroughGap) {
           obstacle['passed'] = true;
-          this.score += 2 * this.scoreMultiplier; // 2 points for passing through vertical gap, multiplied
+          
+          // Calculate style and combo bonuses
+          const currentTime = performance.now();
+          const comboMultiplier = this.comboTracker.getTotalMultiplier();
+          
+          // Check if perfect gap pass (ball center within 30% of gap center)
+          const gapCenterY = obstacle.position.y + obstacle.gapY;
+          const gapTop = gapCenterY - obstacle.gapHeight / 2;
+          const gapBottom = gapCenterY + obstacle.gapHeight / 2;
+          const ballCenterY = this.ball.position.y;
+          const gapCenterDistance = Math.abs(ballCenterY - gapCenterY);
+          const gapRange = obstacle.gapHeight / 2;
+          const isPerfectGap = gapCenterDistance < gapRange * 0.3;
+          
+          // Check for close call (within 20px of obstacle edge)
+          const distanceToTop = Math.abs(ballCenterY - gapTop);
+          const distanceToBottom = Math.abs(ballCenterY - gapBottom);
+          const isCloseCall = distanceToTop < 20 || distanceToBottom < 20;
+          
+          if (isPerfectGap) {
+            const comboMult = this.comboTracker.addGapCombo(currentTime);
+            this.styleMeter.addPerfectGap(comboMult);
+            this.addStyleNotification('PERFECT!', '#eab308');
+            this.perfectRunObstacleCount++;
+          } else if (isCloseCall) {
+            const comboMult = this.comboTracker.addCloseCallCombo(currentTime);
+            this.styleMeter.addCloseCall(comboMult);
+            this.addStyleNotification('CLOSE CALL!', '#ef4444');
+            this.perfectRunObstacleCount++;
+          } else {
+            this.styleMeter.addNoHitStreak();
+            this.perfectRunObstacleCount++;
+          }
+          
+          // Apply style multiplier to score
+          const styleMultiplier = this.styleMeter.getMultiplier();
+          const finalScoreMultiplier = this.scoreMultiplier * styleMultiplier * comboMultiplier;
+          
+          this.score += Math.floor(2 * finalScoreMultiplier);
           if (this.onScoreUpdate) this.onScoreUpdate(this.score);
           
           // Play coin sound when passing through a gap
           this.soundManager.playCoin();
           
-          // Add particle effect when passing through a gap
+          // Add particle effect when passing through a gap (intensity based on style)
+          const particleCount = 3 + Math.floor(styleMultiplier);
           this.particleSystem.addExplosion(
             this.ball.position.x, 
             this.ball.position.y, 
             obstacle.wallColor || getTheme(this.currentTheme).obstacleColor, 
-            3
+            particleCount
           );
           
           if (this.DEBUG_MODE) {
@@ -2706,13 +3591,15 @@ export default class Game {
       }
     }
     
-    // Remove obstacles in reverse order to maintain indices
+    // Remove obstacles efficiently using reverse iteration (already optimized)
     if (obstaclesToRemove.length > 0) {
       if (this.DEBUG_MODE) {
         console.log(`[DEBUG] Removing ${obstaclesToRemove.length} obstacles: [${obstaclesToRemove.join(', ')}]`);
       }
-      for (let i = obstaclesToRemove.length - 1; i >= 0; i--) {
-        this.obstacles.splice(obstaclesToRemove[i], 1);
+      // Sort indices in descending order for safe batch removal
+      obstaclesToRemove.sort((a, b) => b - a);
+      for (const index of obstaclesToRemove) {
+        this.obstacles.splice(index, 1);
       }
       if (this.DEBUG_MODE) {
         console.log(`[DEBUG] After removal: ${this.obstacles.length} obstacles remaining`);
@@ -2723,12 +3610,36 @@ export default class Game {
     // Horizontal walls scroll left with the game (X position decreases)
     const wallsToRemove: number[] = [];
     
+    // Maximum visible walls limit - hard cap to prevent accumulation
+    const MAX_VISIBLE_WALLS = 4;
+    
     // Minimum wall count to maintain - don't remove if it would drop below this
-    const MIN_WALL_COUNT = 3;
+    // Reduced from 3 to 1 to dramatically reduce density
+    const MIN_WALL_COUNT = 1;
     const REMOVAL_BUFFER = 100; // Increased buffer before removal (was 50)
     
-    // Count walls ahead of ball before removal
-    const wallsAheadOfBall = this.horizontalWalls.filter(w => w && w.position.x > this.ball.position.x).length;
+    // Count walls ahead of ball before removal using single-pass iteration (optimization)
+    let wallsAheadOfBall = 0;
+    let visibleWallCount = 0;
+    for (const w of this.horizontalWalls) {
+      if (!w || !w.position) continue;
+      if (w.position.x > this.ball.position.x) {
+        wallsAheadOfBall++;
+      }
+      const wallRight = w.position.x + w.width;
+      if (wallRight >= -REMOVAL_BUFFER && w.position.x <= this.canvas.width + REMOVAL_BUFFER) {
+        visibleWallCount++;
+      }
+    }
+    
+    if (this.DEBUG_MODE && this.horizontalWalls.length > 0 && visibleWallCount === 0) {
+      console.warn(`[Game] No visible horizontal walls! Total: ${this.horizontalWalls.length}, Ahead: ${wallsAheadOfBall}, Ball X: ${this.ball.position.x.toFixed(1)}`);
+      this.horizontalWalls.forEach((w, idx) => {
+        if (w) {
+          console.log(`  Wall ${idx}: X=${w.position.x.toFixed(1)}, width=${w.width}, right=${(w.position.x + w.width).toFixed(1)}`);
+        }
+      });
+    }
     
     // Update wall positions and remove off-screen walls
     for (let i = 0; i < this.horizontalWalls.length; i++) {
@@ -2750,10 +3661,13 @@ export default class Game {
       // Remove walls that are fully off-screen, but only if we have enough walls ahead
       // Check if wall is completely off-screen with buffer
       if (wall.position.x + wall.width < -REMOVAL_BUFFER) {
-        // Only remove if we have enough walls ahead of the ball
-        // This prevents gaps from appearing
-        if (wallsAheadOfBall > MIN_WALL_COUNT || this.horizontalWalls.length > MIN_WALL_COUNT * 2) {
+        // Remove walls immediately when off-screen, only defer if we have less than 1 wall ahead
+        // This prevents accumulation while ensuring we always have at least 1 wall ahead
+        if (wallsAheadOfBall >= MIN_WALL_COUNT) {
           wallsToRemove.push(i);
+          if (this.DEBUG_MODE) {
+            console.log(`[Game] Marking wall ${i} for removal: X=${wall.position.x.toFixed(1)}, wallsAhead=${wallsAheadOfBall}, total=${this.horizontalWalls.length}`);
+          }
         } else {
           if (this.DEBUG_MODE) {
             console.log(`[Game] Deferring wall removal - low wall count. Ahead: ${wallsAheadOfBall}, Total: ${this.horizontalWalls.length}`);
@@ -2763,13 +3677,52 @@ export default class Game {
     }
     
     // Remove off-screen walls in reverse order
+    // Enforce maximum visible walls limit - remove oldest walls if over limit
+    if (this.horizontalWalls.length > MAX_VISIBLE_WALLS) {
+      // Sort walls by X position (oldest/leftmost first)
+      const sortedWalls = this.horizontalWalls
+        .map((wall, index) => ({ wall, index, x: wall.position.x }))
+        .sort((a, b) => a.x - b.x);
+      
+      // Remove oldest walls until under limit
+      const excessCount = this.horizontalWalls.length - MAX_VISIBLE_WALLS;
+      for (let i = 0; i < excessCount; i++) {
+        const wallToRemove = sortedWalls[i];
+        // Only remove if it's behind the ball or off-screen
+        if (wallToRemove.x + wallToRemove.wall.width < this.ball.position.x || 
+            wallToRemove.x + wallToRemove.wall.width < -REMOVAL_BUFFER) {
+          if (!wallsToRemove.includes(wallToRemove.index)) {
+            wallsToRemove.push(wallToRemove.index);
+          }
+        }
+      }
+      
+      if (this.DEBUG_MODE && excessCount > 0) {
+        console.warn(`[Game] Wall count exceeded MAX_VISIBLE_WALLS (${MAX_VISIBLE_WALLS}). Removing ${excessCount} excess walls. Total: ${this.horizontalWalls.length}`);
+      }
+    }
+    
     const removedCount = wallsToRemove.length;
-    for (let i = wallsToRemove.length - 1; i >= 0; i--) {
+    // Sort removal indices in descending order to avoid index shifting issues
+    wallsToRemove.sort((a, b) => b - a);
+    for (let i = 0; i < wallsToRemove.length; i++) {
       this.horizontalWalls.splice(wallsToRemove[i], 1);
     }
     
     if (this.DEBUG_MODE && removedCount > 0) {
-      console.log(`[Game] Removed ${removedCount} horizontal walls. Remaining: ${this.horizontalWalls.length}, Ahead of ball: ${this.horizontalWalls.filter(w => w && w.position.x > this.ball.position.x).length}`);
+      // Count walls ahead for debug log using single-pass iteration (optimization)
+      let debugWallsAhead = 0;
+      for (const w of this.horizontalWalls) {
+        if (w && w.position && w.position.x > this.ball.position.x) {
+          debugWallsAhead++;
+        }
+      }
+      console.log(`[Game] Removed ${removedCount} horizontal walls. Remaining: ${this.horizontalWalls.length}, Ahead of ball: ${debugWallsAhead}`);
+    }
+    
+    // Debug logging for wall counts
+    if (this.DEBUG_MODE && this.horizontalWalls.length > MAX_VISIBLE_WALLS) {
+      console.warn(`[Game] WARNING: Wall count (${this.horizontalWalls.length}) still exceeds MAX_VISIBLE_WALLS (${MAX_VISIBLE_WALLS}) after removal`);
     }
     
     // Don't update lastHorizontalWallX here - it should only be updated when we generate new walls
@@ -2887,18 +3840,57 @@ export default class Game {
         // Score if ball passed through the gap AND was in the wall's Y range
         if (hasPassedGapX && ballWasInWallY && passedThroughGap && !wall.passed) {
           wall.passed = true;
-          this.score += 2 * this.scoreMultiplier; // 2 points for passing through horizontal gap, multiplied
+          
+          // Calculate style and combo bonuses
+          const currentTime = performance.now();
+          const comboMultiplier = this.comboTracker.getTotalMultiplier();
+          
+          // Check if perfect gap pass (ball center within 30% of gap center)
+          const gapCenterX = wall.gapX!;
+          const gapLeft = gapCenterX - wall.gapWidth! / 2;
+          const gapRight = gapCenterX + wall.gapWidth! / 2;
+          const ballCenterX = this.ball.position.x;
+          const gapCenterDistance = Math.abs(ballCenterX - gapCenterX);
+          const gapRange = wall.gapWidth! / 2;
+          const isPerfectGap = gapCenterDistance < gapRange * 0.3;
+          
+          // Check for close call
+          const distanceToLeft = Math.abs(ballCenterX - gapLeft);
+          const distanceToRight = Math.abs(ballCenterX - gapRight);
+          const isCloseCall = distanceToLeft < 20 || distanceToRight < 20;
+          
+          if (isPerfectGap) {
+            const comboMult = this.comboTracker.addGapCombo(currentTime);
+            this.styleMeter.addPerfectGap(comboMult);
+            this.addStyleNotification('PERFECT!', '#eab308');
+            this.perfectRunObstacleCount++;
+          } else if (isCloseCall) {
+            const comboMult = this.comboTracker.addCloseCallCombo(currentTime);
+            this.styleMeter.addCloseCall(comboMult);
+            this.addStyleNotification('CLOSE CALL!', '#ef4444');
+            this.perfectRunObstacleCount++;
+          } else {
+            this.styleMeter.addNoHitStreak();
+            this.perfectRunObstacleCount++;
+          }
+          
+          // Apply style multiplier to score
+          const styleMultiplier = this.styleMeter.getMultiplier();
+          const finalScoreMultiplier = this.scoreMultiplier * styleMultiplier * comboMultiplier;
+          
+          this.score += Math.floor(2 * finalScoreMultiplier);
           if (this.onScoreUpdate) this.onScoreUpdate(this.score);
           
           // Play coin sound when passing through gap
           this.soundManager.playCoin();
           
           // Add particle effect when passing through gap
+          const particleCount = 3 + Math.floor(styleMultiplier);
           this.particleSystem.addExplosion(
             this.ball.position.x, 
             this.ball.position.y, 
             wall.wallColor || getTheme(this.currentTheme).obstacleColor, 
-            3
+            particleCount
           );
           
           if (this.DEBUG_MODE) {
@@ -3006,6 +3998,11 @@ export default class Game {
           15
         );
         
+        // Break combo and apply style penalty
+        this.comboTracker.breakCombo();
+        this.styleMeter.onCollision();
+        this.perfectRunObstacleCount = 0;
+        
         // Check for extra time or shield before game over
         if (this.extraTime > 0) {
           // Use extra time instead of game over
@@ -3050,21 +4047,52 @@ export default class Game {
       
       // Only generate obstacles when needed (not every frame)
       const generationCheckTime = performance.now();
-      const shouldCheckGeneration = generationCheckTime - this.lastGenerationCheck > 50; // Check every 50ms (reduced from 100ms)
+      // Increased from 50ms to 200ms to generate less frequently and prevent accumulation
+      const shouldCheckGeneration = generationCheckTime - this.lastGenerationCheck > 200;
       
       // Minimum wall count threshold - ensure we always have walls ahead
-      const MIN_WALL_COUNT = 3;
+      // Reduced from 3 to 1 to dramatically reduce density
+      const MIN_WALL_COUNT = 1;
       const wallsAheadOfBall = this.horizontalWalls.filter(w => w && w.position.x > this.ball.position.x).length;
       const needsMoreWalls = this.horizontalWalls.length < MIN_WALL_COUNT || wallsAheadOfBall < MIN_WALL_COUNT;
       
+      // Critical: Always generate if no walls exist (initial generation)
+      const hasNoWalls = this.horizontalWalls.length === 0;
+      
+      // Check if chunks are exhausted - if so, ensure procedural generation happens
+      const chunksExhausted = this.levelChunks.length === 0 || this.consumedChunkCount >= this.levelChunks.length;
+      
+      // Check if remaining chunks don't have horizontal walls data
+      // If chunks exist but don't have horizontal walls, we need continuous procedural generation
+      const hasChunksWithoutWalls = this.levelChunks.length > 0 && 
+        this.consumedChunkCount < this.levelChunks.length &&
+        this.levelChunks.slice(this.consumedChunkCount).some(chunk => 
+          !chunk.horizontalWalls || chunk.horizontalWalls.length === 0
+        );
+      
       // Generate procedural horizontal walls as needed
-      // Check more frequently if we're running low on walls
-      if (shouldCheckGeneration || this.needsObstacleGeneration || needsMoreWalls) {
+      // Check more frequently if we're running low on walls or have no walls
+      // Also check when chunks are exhausted OR when chunks don't have horizontal walls data
+      // to ensure continuous wall generation
+      if (hasNoWalls || shouldCheckGeneration || this.needsObstacleGeneration || needsMoreWalls || chunksExhausted || hasChunksWithoutWalls) {
         try {
-          if (this.DEBUG_MODE && needsMoreWalls) {
-            console.log(`[Game] Low wall count detected - forcing generation. Total: ${this.horizontalWalls.length}, Ahead: ${wallsAheadOfBall}`);
+          if (this.DEBUG_MODE) {
+            if (hasNoWalls) {
+              console.log(`[Game] No walls exist - forcing initial generation. ballX: ${this.ball.position.x.toFixed(1)}`);
+            } else if (needsMoreWalls) {
+              console.log(`[Game] Low wall count detected - forcing generation. Total: ${this.horizontalWalls.length}, Ahead: ${wallsAheadOfBall}`);
+            } else if (chunksExhausted) {
+              console.log(`[Game] Chunks exhausted (consumed: ${this.consumedChunkCount}/${this.levelChunks.length}) - ensuring procedural wall generation`);
+            } else if (hasChunksWithoutWalls) {
+              console.log(`[Game] Chunks without horizontal walls detected (consumed: ${this.consumedChunkCount}/${this.levelChunks.length}) - ensuring continuous procedural generation`);
+            }
           }
           this.generateProceduralHorizontalWalls();
+          
+          // Validate that walls were generated
+          if (hasNoWalls && this.horizontalWalls.length === 0 && this.DEBUG_MODE) {
+            console.error('[Game] Failed to generate initial walls - this should not happen');
+          }
         } catch (error) {
           console.error('[Game] Error generating procedural horizontal walls:', error);
           // Continue - walls will regenerate next frame
@@ -3164,9 +4192,22 @@ export default class Game {
       }
       
       // Draw obstacles (vertical walls) - these move with camera
+      // Add culling optimization: only render obstacles that are visible or near viewport
       try {
-        this.obstacles.forEach(obstacle => {
-          if (!obstacle) return; // Skip null/undefined obstacles
+        const viewportBuffer = 200; // Buffer to render slightly off-screen obstacles
+        const canvasRight = this.canvas.width + viewportBuffer;
+        const canvasLeft = -viewportBuffer;
+        
+        // Single-pass iteration instead of filter() to avoid creating new array
+        for (const obstacle of this.obstacles) {
+          if (!obstacle) continue;
+          // Check if obstacle is within viewport (accounting for camera offset)
+          const obstacleRight = obstacle.position.x + obstacle.width;
+          const obstacleLeft = obstacle.position.x;
+          // Obstacles extend vertically, so only check X position
+          if (obstacleRight < canvasLeft || obstacleLeft > canvasRight) continue;
+          
+          // Obstacle is visible - render it
           try {
             this.renderer.drawObstacle(obstacle);
             
@@ -3178,7 +4219,7 @@ export default class Game {
             console.error('[Game] Error rendering obstacle');
             // Continue with next obstacle
           }
-        });
+        }
       } catch {
         console.error('[Game] Error rendering obstacles array');
       }
@@ -3186,15 +4227,23 @@ export default class Game {
       // Draw horizontal walls - these move with camera offset (they're at various Y positions)
       // Walls scroll horizontally but follow camera vertically
       try {
+        // Frustum culling for horizontal walls - only render visible walls
+        const viewportBuffer = 200; // Buffer to render slightly off-screen walls
+        const canvasRight = this.canvas.width + viewportBuffer;
+        const canvasLeft = -viewportBuffer;
+        
         // Debug: Log wall rendering status
         if (this.DEBUG_MODE && this.horizontalWalls.length > 0) {
-          const visibleWalls = this.horizontalWalls.filter(w => {
-            if (!w) return false;
+          let visibleCount = 0;
+          for (const w of this.horizontalWalls) {
+            if (!w) continue;
             const wallRight = w.position.x + w.width;
             const wallLeft = w.position.x;
-            return !(wallRight < 0 || wallLeft > this.canvas.width);
-          });
-          if (visibleWalls.length === 0 && this.horizontalWalls.length > 0) {
+            if (wallRight >= canvasLeft && wallLeft <= canvasRight) {
+              visibleCount++;
+            }
+          }
+          if (visibleCount === 0 && this.horizontalWalls.length > 0) {
             console.warn(`[Game] No visible horizontal walls to render! Total walls: ${this.horizontalWalls.length}, Ball X: ${this.ball.position.x.toFixed(1)}`);
             this.horizontalWalls.forEach((w, idx) => {
               if (w) {
@@ -3205,10 +4254,21 @@ export default class Game {
         }
         
         // Horizontal walls are drawn with camera offset applied (already in transform stack)
-        this.renderer.drawHorizontalWalls(this.horizontalWalls);
-        
-        // Draw connections between horizontal walls and vertical obstacles
+        // Frustum culling: only pass visible walls to renderer
+        const visibleHorizontalWalls: Obstacle[] = [];
         for (const wall of this.horizontalWalls) {
+          if (!wall) continue;
+          const wallRight = wall.position.x + wall.width;
+          const wallLeft = wall.position.x;
+          // Check if wall is within viewport (with buffer for smooth scrolling)
+          if (wallRight >= canvasLeft && wallLeft <= canvasRight) {
+            visibleHorizontalWalls.push(wall);
+          }
+        }
+        this.renderer.drawHorizontalWalls(visibleHorizontalWalls);
+        
+        // Draw connections between horizontal walls and vertical obstacles (only for visible walls)
+        for (const wall of visibleHorizontalWalls) {
           if (wall && wall.connectedObstacleId !== undefined) {
             const connectedObstacle = this.obstacles[wall.connectedObstacleId];
             if (connectedObstacle) {
@@ -3309,6 +4369,28 @@ export default class Game {
         this.renderer.drawScore(this.score, level, progressToNextLevel);
       } catch {
         console.error('[Game] Error drawing score');
+      }
+      
+      // Draw style meter and combo counter
+      try {
+        const styleLevel = this.styleMeter.getLevel();
+        const stylePoints = this.styleMeter.getPoints();
+        const styleProgress = this.styleMeter.getProgress();
+        const styleColor = this.styleMeter.getColor();
+        const activeCombo = this.comboTracker.getActiveCombo();
+        
+        this.renderer.drawStyleMeter(styleLevel, stylePoints, styleProgress, styleColor);
+        
+        if (activeCombo && activeCombo.isActive) {
+          this.renderer.drawComboCounter(activeCombo.count, activeCombo.multiplier);
+        }
+        
+        // Draw style notifications
+        for (const notification of this.styleNotifications) {
+          this.renderer.drawStyleNotification(notification);
+        }
+      } catch {
+        console.error('[Game] Error drawing style system UI');
       }
       
       // Draw difficulty level (bottom right for Level 1, top right for others)
@@ -3467,6 +4549,19 @@ export default class Game {
     // This method can be extended for per-frame updates if needed
   }
   
+  // Add a style notification
+  private addStyleNotification(text: string, color: string): void {
+    this.styleNotifications.push({
+      text,
+      x: this.ball.position.x,
+      y: this.ball.position.y,
+      life: 2000, // 2 seconds
+      maxLife: 2000,
+      scale: 1.0,
+      color,
+    });
+  }
+  
   private gameOver(): void {
     // Prevent duplicate gameOver calls - if already in gameOver state, ignore
     if (this.status === 'gameOver') {
@@ -3582,10 +4677,29 @@ export default class Game {
       this.resizeRafId = null;
     }
     
+    // Clear error recovery timeout
+    if (this.errorRecoveryTimeoutId !== null) {
+      clearTimeout(this.errorRecoveryTimeoutId);
+      this.errorRecoveryTimeoutId = null;
+    }
+    
+    // Cancel pending checkpoint saves
+    if (this.pendingCheckpointIdleCallback !== null && typeof window !== 'undefined' && 'cancelIdleCallback' in window) {
+      window.cancelIdleCallback(this.pendingCheckpointIdleCallback);
+      this.pendingCheckpointIdleCallback = null;
+    }
+    if (this.pendingCheckpointTimeout !== null) {
+      clearTimeout(this.pendingCheckpointTimeout);
+      this.pendingCheckpointTimeout = null;
+    }
+    
     // Remove resize event listener
     if (this.resizeHandler) {
       window.removeEventListener('resize', this.resizeHandler);
     }
+    
+    // Clean up sound manager
+    this.soundManager.destroy();
     
     this.inputHandler.destroy();
   }

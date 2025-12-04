@@ -64,6 +64,12 @@ export interface LevelChunk {
   gapHeight: number;   // 0.1–0.3
   obstacleType: 'pipe' | 'spike' | 'moving';
   theme: ThemeKey;
+  // Horizontal wall data (optional - for AI-generated levels)
+  horizontalWalls?: {
+    wallY: number;      // Y position of horizontal wall (0–1 normalized, 0=top, 1=bottom)
+    gapX: number;        // center X of safe gap in horizontal wall (0–1 normalized)
+    gapWidth: number;    // width of safe gap (0.2–0.6 normalized)
+  }[];
 }
 
 export interface LevelData {
@@ -96,7 +102,70 @@ export type BackgroundElementType =
   | 'pattern'
   | 'isometric'
   | 'cube'
-  | 'pyramid';
+  | 'pyramid'
+  | 'sanddune'
+  | 'cactus'
+  | 'mirage'
+  | 'sunray'
+  | 'icecrystal'
+  | 'aurora'
+  | 'snowflake'
+  | 'glacier'
+  | 'lavaflow'
+  | 'ember'
+  | 'smoke'
+  | 'magmabubble'
+  | 'neonsign'
+  | 'hologram'
+  | 'digitalrain'
+  | 'gridline'
+  | 'gumdrop'
+  | 'lollipop'
+  | 'candycane'
+  | 'sprinkle'
+  | 'bioluminescence'
+  | 'stalactite'
+  | 'crystal'
+  | 'gemstone'
+  | 'lightrefraction'
+  | 'crystalformation'
+  | 'sparkle'
+  | 'mushroom'
+  | 'spore'
+  | 'glowingcap'
+  | 'mycelium'
+  | 'rainbow'
+  | 'lightning'
+  | 'skypalace'
+  | 'skyscraper'
+  | 'trafficlight'
+  | 'billboard'
+  | 'vine'
+  | 'tropicalflower'
+  | 'waterfall'
+  | 'exoticbird'
+  | 'tombstone'
+  | 'mist'
+  | 'ghost'
+  | 'moonlight'
+  | 'deepseacreature'
+  | 'kelpforest'
+  | 'bioluminescentfish'
+  | 'palmtree'
+  | 'wave'
+  | 'seagull'
+  | 'sunsetgradient'
+  | 'fairylight'
+  | 'enchantedtree'
+  | 'firefly'
+  | 'magicorb'
+  | 'gear'
+  | 'steam'
+  | 'factory'
+  | 'pixelart'
+  | 'eightbitpattern'
+  | 'arcade'
+  | 'pixelstar';
 
 export interface BackgroundElement {
   type: BackgroundElementType;
@@ -158,4 +227,60 @@ export interface RandomEvent {
   startTime: number;
   endTime: number;
   intensity?: number; // Optional intensity modifier
+}
+
+// Style & Combo System Types
+export type StyleLevel = 'D' | 'C' | 'B' | 'A' | 'S' | 'SS' | 'SSS';
+
+export type ComboType = 'gap' | 'closeCall' | 'powerUp' | 'mixed';
+
+export interface StyleData {
+  points: number;
+  level: StyleLevel;
+  previousLevel: StyleLevel;
+  noHitStreak: number;
+  lastActionTime: number;
+}
+
+export interface ComboData {
+  type: ComboType;
+  count: number;
+  multiplier: number;
+  lastActionTime: number;
+  isActive: boolean;
+}
+
+export interface StyleNotification {
+  text: string;
+  x: number;
+  y: number;
+  life: number;
+  maxLife: number;
+  scale: number;
+  color: string;
+}
+
+// Achievement System Types
+export type AchievementType = 'style' | 'combo' | 'skill' | 'progression';
+
+export type UnlockType = 'theme' | 'trail' | 'particle' | 'sound';
+
+export interface Achievement {
+  id: string;
+  type: AchievementType;
+  name: string;
+  description: string;
+  unlocked: boolean;
+  unlockedAt?: number;
+  progress: number;
+  target: number;
+}
+
+export interface Unlock {
+  id: string;
+  type: UnlockType;
+  name: string;
+  description: string;
+  unlocked: boolean;
+  unlockedAt?: number;
 }
