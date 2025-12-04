@@ -155,14 +155,12 @@ export default class Game {
     this.comboTracker = new ComboTracker();
     this.inputHandler = new InputHandler(canvas, this.handleTap.bind(this));
     
-    // Set callbacks
     if (callbacks) {
       this.onGameOver = callbacks.onGameOver;
       this.onScoreUpdate = callbacks.onScoreUpdate;
       this.onCheckpointSave = callbacks.onCheckpointSave;
     }
     
-    // Initialize ball
     this.ball = {
       position: { x: 100, y: this.canvas.height / 2 },
       velocity: { x: 0, y: 0 },
@@ -174,17 +172,12 @@ export default class Game {
     this.resize();
     window.addEventListener('resize', this.resizeHandler);
 
-    // Don't initialize horizontal walls in constructor - they should only appear when game starts
-    // Initialize with empty array instead
     this.horizontalWalls = [];
     if (this.DEBUG_MODE) {
       console.log('[GAME_DEBUG] Horizontal walls initialized as empty array in constructor');
     }
 
-    // Start in idle state with a running render loop so the player
-    // immediately sees the tap-to-start message.
     this.status = 'idle';
-    // Log initial game state
     if (this.DEBUG_MODE) {
       console.log('[GAME_DEBUG] ===== GAME INITIALIZED =====');
       console.log('[GAME_DEBUG] Canvas dimensions:', { width: this.canvas.width, height: this.canvas.height });
@@ -197,7 +190,6 @@ export default class Game {
 
     this.lastTime = performance.now();
     this.lastPerformanceLog = this.lastTime;
-    // Only start loop if not already running
     if (!this.isLoopRunning && this.animationFrameId === null) {
       this.isLoopRunning = true;
       this.animationFrameId = requestAnimationFrame(this.gameLoop.bind(this));
@@ -421,10 +413,7 @@ export default class Game {
     }
   }
 
-  // Continue / resume play from a saved checkpoint or safe position.
-  // This is primarily called from the React layer after a rewarded ad.
   continue(snapshot?: GameStateSnapshot): void {
-    // Allow continue from any non-playing state (e.g. gameOver, idle, paused)
     if (this.status === 'playing') {
       if (this.DEBUG_MODE) {
         console.log('[Game] continue() called but game already playing, ignoring');
@@ -436,18 +425,14 @@ export default class Game {
       console.log('[Game] continue() called, previous status:', this.status, 'hasSnapshot:', !!snapshot);
     }
 
-    // Restore from checkpoint BEFORE changing status
     if (snapshot) {
       try {
-        // Validate snapshot before restoring
         if (!snapshot.ball || !snapshot.ball.position) {
           console.error('[Game] Invalid checkpoint snapshot - missing ball data');
-          // Fallback to safe position
           this.ball.position.x = 100;
           this.ball.position.y = this.canvas.height / 2;
           this.ball.velocity = { x: 0, y: 0 };
         } else {
-          // Restore from checkpoint - this will restore all state including score, ball position, obstacles, etc.
           this.restoreFromCheckpoint(snapshot);
           if (this.DEBUG_MODE) {
             console.log('[Game] Successfully restored from checkpoint, score:', this.score);
@@ -455,13 +440,11 @@ export default class Game {
         }
       } catch (error) {
         console.error('[Game] Error restoring from checkpoint:', error);
-        // Fallback: Reset ball to a safe position
         this.ball.position.x = 100;
         this.ball.position.y = this.canvas.height / 2;
         this.ball.velocity = { x: 0, y: 0 };
       }
     } else {
-      // Fallback: Reset ball to a safe position (center of screen, slightly above)
       this.ball.position.x = 100;
       this.ball.position.y = this.canvas.height / 2;
       this.ball.velocity = { x: 0, y: 0 };

@@ -17,7 +17,6 @@ class LRUCache<K, V> {
     if (!this.cache.has(key)) {
       return undefined;
     }
-    // Move to end (most recently used)
     const value = this.cache.get(key)!;
     this.cache.delete(key);
     this.cache.set(key, value);
@@ -26,10 +25,8 @@ class LRUCache<K, V> {
   
   set(key: K, value: V): void {
     if (this.cache.has(key)) {
-      // Update existing - move to end
       this.cache.delete(key);
     } else if (this.cache.size >= this.maxSize) {
-      // Remove least recently used (first item)
       const firstKey = this.cache.keys().next().value;
       if (firstKey !== undefined) {
         this.cache.delete(firstKey);
@@ -98,15 +95,13 @@ export class Renderer {
     }
     this.ctx = ctx;
     this.currentTheme = getTheme('normal');
-    // Initialize world bounds (10x canvas height for vertical space)
     this.WORLD_HEIGHT = canvas.height * 10;
-    this.WORLD_WIDTH = canvas.width * 100; // Large width for horizontal scrolling
+    this.WORLD_WIDTH = canvas.width * 100;
     this.initializeBackgroundLayers();
   }
   
   setTheme(themeName: string): void {
     this.currentTheme = getTheme(themeName);
-    // Don't regenerate backgrounds here - they're level-based now
   }
 
   setLevel(level: number): void {
@@ -115,9 +110,7 @@ export class Renderer {
       this.currentLevel = level;
       this.currentBackgroundTheme = getBackgroundThemeForLevel(level);
       
-      // Add transition effect if theme changed
       if (previousTheme !== this.currentBackgroundTheme && this.enableAdvancedEffects) {
-        // Transition particles will be handled in Game.ts
         this.initializeBackgroundLayers();
       } else {
         this.initializeBackgroundLayers();
@@ -125,7 +118,6 @@ export class Renderer {
     }
   }
   
-  // Apply color grading based on current biome theme
   applyColorGrading(): void {
     if (!this.enableAdvancedEffects || this.currentLevel === 1) return;
     
@@ -133,12 +125,10 @@ export class Renderer {
     const rgb = this.hexToRgb(themeConfig.backgroundColor);
     if (!rgb) return;
     
-    // Apply subtle color overlay based on biome
     this.ctx.save();
     this.ctx.globalCompositeOperation = 'overlay';
-    this.ctx.globalAlpha = 0.08; // Very subtle
+    this.ctx.globalAlpha = 0.08;
     
-    // Create gradient overlay based on biome colors
     const overlayGradient = this.ctx.createLinearGradient(0, 0, 0, this.canvas.height);
     overlayGradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.05)`);
     overlayGradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.12)`);
@@ -161,22 +151,17 @@ export class Renderer {
       return; // Don't create parallax layers for Level 1
     }
     
-    // Initialize seeded random for consistent generation per level
     this.initSeededRandom(this.currentLevel);
     
-    // Get theme configuration
     const themeConfig = getBackgroundThemeConfig(this.currentBackgroundTheme);
     
-    // Generate layers based on theme configuration
     const layerCount = themeConfig.parallaxSpeeds.length;
     for (let i = 0; i < layerCount; i++) {
       const parallaxSpeed = themeConfig.parallaxSpeeds[i];
-      // Reduce element counts for performance - use 60% of configured count
       const baseElementCount = themeConfig.elementCounts[i] || 10;
       const elementCount = Math.floor(baseElementCount * 0.6);
-      const opacity = 0.3 + (i * 0.1); // Increase opacity for closer layers
+      const opacity = 0.3 + (i * 0.1);
       
-      // Get element types for this layer based on theme
       const elementTypes = this.getElementTypesForLayer(themeConfig, i);
       
       this.backgroundLayers.push({
@@ -194,7 +179,6 @@ export class Renderer {
     }
   }
   
-  // Generate static background elements for Level 1
   private generateLevel1StaticBackground(): void {
     this.level1StaticElements = [];
     this.initSeededRandom(1); // Use seed 1 for Level 1
@@ -628,53 +612,35 @@ export class Renderer {
     // The camera/viewport moves through the world space instead
     // For hybrid approach: far parallax layers (parallaxSpeed < 0.3) can scroll for depth effect
     
-    // Update Level 1 static elements - keep in world space, no scrolling
-    // Elements stay at their world positions, camera moves through them
     if (this.currentLevel === 1 && this.level1StaticElements.length > 0) {
-      // Level 1 elements are static in world space - no updates needed
-      // They will be rendered based on camera position
     }
     
-    // Update background layers - hybrid approach:
-    // - Far layers (parallaxSpeed < 0.3): can scroll for depth parallax effect
-    // - Near layers (parallaxSpeed >= 0.3): static in world space
     for (const layer of this.backgroundLayers) {
       for (const element of layer.elements) {
-        // Only scroll far parallax layers for depth effect
         if (element.parallaxSpeed < 0.3) {
-          // Far layers scroll slowly for parallax depth
           element.x -= scrollSpeed * deltaTime * element.parallaxSpeed;
           
-          // If element scrolls off-screen to the left, regenerate it on the right
           if (element.x + element.size < 0) {
             element.x = this.WORLD_WIDTH + this.random() * this.canvas.width;
             element.y = this.random() * this.WORLD_HEIGHT;
-            // Occasionally change size and opacity for variety
             if (this.random() < 0.3) {
               element.size = 20 + this.random() * 80;
               element.opacity = 0.2 + this.random() * 0.4;
             }
           }
         }
-        // Near layers (parallaxSpeed >= 0.3) stay static in world space
-        // Camera moves through them, they don't scroll
       }
     }
   }
   
   private drawBackgroundElement(element: BackgroundElement, layer: BackgroundLayer): void {
-    // Validate element size to prevent rendering errors
     if (!element.size || element.size <= 0) {
       return;
     }
     
-    // Check if element is visible in viewport (accounting for camera offset)
-    // Element positions are in world space, camera offset is applied in Game.ts render()
-    // So we check if element would be visible after camera transform
-    const elementScreenX = element.x; // X is in world space, camera doesn't affect X
-    const elementScreenY = element.y - this.cameraOffsetY; // Y is affected by camera offset
+    const elementScreenX = element.x;
+    const elementScreenY = element.y - this.cameraOffsetY;
     
-    // Calculate distance from viewport center for LOD
     const viewportCenterX = this.canvas.width / 2;
     const viewportCenterY = this.canvas.height / 2;
     const distanceFromCenter = Math.sqrt(
@@ -682,7 +648,6 @@ export class Renderer {
       Math.pow(elementScreenY - viewportCenterY, 2)
     );
     
-    // Apply LOD - reduce size and effects for distant elements
     let effectiveSize = element.size;
     let useLOD = false;
     if (distanceFromCenter > this.LOD_DISTANCE_THRESHOLD) {
@@ -690,18 +655,15 @@ export class Renderer {
       useLOD = true;
     }
     
-    // Only draw if element is within viewport bounds (with buffer for off-screen elements)
-    const buffer = effectiveSize * 2; // Buffer to draw slightly off-screen elements
+    const buffer = effectiveSize * 2;
     if (elementScreenX + effectiveSize + buffer < 0 || 
         elementScreenX - buffer > this.canvas.width ||
         elementScreenY + effectiveSize + buffer < 0 || 
         elementScreenY - buffer > this.canvas.height) {
-      return; // Element is outside viewport
+      return;
     }
     
-    // Skip advanced effects for LOD elements
     if (useLOD && this.effectIntensity === 'low') {
-      // Skip rendering entirely for very distant low-intensity elements
       if (distanceFromCenter > this.LOD_DISTANCE_THRESHOLD * 1.5) {
         return;
       }
@@ -709,13 +671,10 @@ export class Renderer {
     
     this.ctx.save();
     
-    // Reduce opacity for LOD elements
     const lodOpacityMultiplier = useLOD ? 0.6 : 1.0;
     this.ctx.globalAlpha = element.opacity * layer.opacity * lodOpacityMultiplier;
     const color = element.color || layer.color;
     
-    // Convert world coordinates to screen coordinates (account for camera offset)
-    // Background is drawn before camera transform, so we apply offset manually
     const screenX = elementScreenX;
     const screenY = elementScreenY;
     

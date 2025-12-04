@@ -5,76 +5,48 @@ import { validateLevelData, validateAndFixChunk } from '@/lib/levelValidator'
 import { NextResponse } from 'next/server'
 import { LevelData, LevelChunk } from '@/bounzle-game/types'
 
-// Rate limiting store (in production, use Redis or database)
 const rateLimitStore = new Map<string, { count: number; resetTime: number }>()
 
-// Check rate limit for an IP
 function checkRateLimit(ip: string): { allowed: boolean; resetTime?: number } {
   const now = Date.now()
-  const windowMs = 60 * 1000 // 1 minute
+  const windowMs = 60 * 1000
   const maxRequests = 5
 
   const record = rateLimitStore.get(ip)
 
-  // If no record or record expired, reset
   if (!record || record.resetTime < now) {
     rateLimitStore.set(ip, { count: 1, resetTime: now + windowMs })
     return { allowed: true }
   }
 
-  // If under limit, increment
   if (record.count < maxRequests) {
     rateLimitStore.set(ip, { count: record.count + 1, resetTime: record.resetTime })
     return { allowed: true }
   }
 
-  // Rate limited
   return { allowed: false, resetTime: record.resetTime }
 }
 
-// Strip markdown code blocks from AI response
 function stripMarkdownCodeBlocks(content: string): string {
-  // Remove markdown code block markers (```json, ```, etc.)
   let cleaned = content.trim()
   
-  // Remove opening code block (```json or ```)
   cleaned = cleaned.replace(/^```(?:json|javascript|js)?\s*\n?/i, '')
-  
-  // Remove closing code block (```)
   cleaned = cleaned.replace(/\n?```\s*$/i, '')
-  
-  // Handle case where content might be wrapped in multiple code blocks
-  // Remove any remaining code block markers
   cleaned = cleaned.replace(/```.*?\n/g, '').replace(/\n```/g, '')
   
   return cleaned.trim()
 }
 
-// Clean and fix common JSON issues
 function cleanJSON(jsonString: string): string {
   let cleaned = jsonString.trim()
   
-  // Remove single-line comments (// ...)
   cleaned = cleaned.replace(/\/\/.*$/gm, '')
-  
-  // Remove multi-line comments (/* ... */)
   cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, '')
-  
-  // Remove trailing commas before } or ]
   cleaned = cleaned.replace(/,(\s*[}\]])/g, '$1')
-  
-  // Fix common typos like "stacleType" -> "obstacleType"
   cleaned = cleaned.replace(/"stacleType"/g, '"obstacleType"')
-  
-  // Fix missing commas between array elements
-  // This pattern looks for }{ (missing comma) and replaces with },{
   cleaned = cleaned.replace(/}(\s*)\{/g, '},$1{')
-  
-  // Fix missing commas between object properties
-  // This pattern looks for "property": value "property": value (missing comma)
   cleaned = cleaned.replace(/"(\w+)"\s*:\s*("[^"]*"|\d+\.?\d*|\w+)(\s*)"(\w+)"/g, '"$1": $2,$3"$4"')
   
-  // Try to extract JSON object if it's embedded in text
   const jsonMatch = cleaned.match(/\{[\s\S]*\}/)
   if (jsonMatch) {
     cleaned = jsonMatch[0]
@@ -83,10 +55,8 @@ function cleanJSON(jsonString: string): string {
   return cleaned.trim()
 }
 
-// Try to extract valid chunks from incomplete/truncated JSON
 function extractChunksFromIncompleteJSON(jsonString: string): LevelChunk[] | null {
   try {
-    // Look for the chunks array pattern - find "chunks": followed by [
     const chunksMatch = jsonString.match(/"chunks"\s*:\s*\[([\s\S]*)/)
     if (!chunksMatch) {
       return null
@@ -95,9 +65,6 @@ function extractChunksFromIncompleteJSON(jsonString: string): LevelChunk[] | nul
     const chunksContent = chunksMatch[1]
     const chunks: LevelChunk[] = []
     
-    // Improved regex to match complete and partial chunk objects
-    // Match: { "gapY": number, "gapHeight": number, "obstacleType": "string", "theme": "string" }
-    // Handles incomplete objects (missing closing brace) and missing commas
     const chunkPattern = /\{\s*"gapY"\s*:\s*([0-9.]+)\s*(?:,\s*"gapHeight"\s*:\s*([0-9.]+))?\s*(?:,\s*"obstacleType"\s*:\s*"([^"]*)")?\s*(?:,\s*"theme"\s*:\s*"([^"]*)")?\s*\}?/g
     
     let match
@@ -107,18 +74,14 @@ function extractChunksFromIncompleteJSON(jsonString: string): LevelChunk[] | nul
       const obstacleType = (match[3] || 'pipe').trim()
       const theme = (match[4] || 'normal').trim()
       
-      // Validate and fix values
       if (!isNaN(gapY) && gapY >= 0 && gapY <= 1) {
-        // Fix gapHeight if invalid
         let fixedGapHeight = gapHeight
         if (isNaN(fixedGapHeight) || fixedGapHeight <= 0 || fixedGapHeight > 1) {
           fixedGapHeight = 0.2
         }
         
-        // Fix obstacleType if invalid or truncated
         let fixedObstacleType: 'pipe' | 'spike' | 'moving' = 'pipe'
         if (obstacleType) {
-          // Handle truncated values (e.g., "p" instead of "pipe", "mov" instead of "moving")
           if (obstacleType.startsWith('pipe') || obstacleType === 'p') {
             fixedObstacleType = 'pipe'
           } else if (obstacleType.startsWith('spike') || obstacleType === 's' || obstacleType.startsWith('sp')) {
@@ -130,7 +93,6 @@ function extractChunksFromIncompleteJSON(jsonString: string): LevelChunk[] | nul
           }
         }
         
-        // Fix theme if invalid or truncated
         let fixedTheme: 'normal' | 'neon' | 'lava' = 'normal'
         if (theme) {
           if (theme.startsWith('normal') || theme === 'n' || theme.startsWith('nor')) {
@@ -160,16 +122,12 @@ function extractChunksFromIncompleteJSON(jsonString: string): LevelChunk[] | nul
   }
 }
 
-// Generate a safe, playable level chunk
 function generateSafeChunk(previousGapY: number): LevelChunk {
-  // Start from previous gap position
   let gapY = previousGapY
   
-  // Add small random variation (max 20% change)
   const variation = (Math.random() - 0.5) * 0.2
   gapY = Math.max(0.2, Math.min(0.8, gapY + variation))
   
-  // Ensure smooth transition
   const maxChange = 0.25
   if (gapY > previousGapY + maxChange) {
     gapY = previousGapY + maxChange
@@ -177,7 +135,6 @@ function generateSafeChunk(previousGapY: number): LevelChunk {
     gapY = previousGapY - maxChange
   }
   
-  // Generate safe gap height (0.15-0.25 normalized)
   const gapHeight = Math.random() * 0.1 + 0.15
   
   return {
@@ -190,10 +147,8 @@ function generateSafeChunk(previousGapY: number): LevelChunk {
 
 export async function POST(request: Request) {
   try {
-    // Get client IP (simplified for development)
     const ip = request.headers.get('x-forwarded-for') || '127.0.0.1'
     
-    // Check rate limit
     const rateLimit = checkRateLimit(ip)
     if (!rateLimit.allowed) {
       return NextResponse.json(
@@ -205,7 +160,6 @@ export async function POST(request: Request) {
     const body = await request.json()
     const { seed, checkpoint, previousGapY, canvasHeight } = body
 
-    // Validate input
     if (typeof seed !== 'number' || typeof checkpoint !== 'number') {
       return NextResponse.json(
         { error: 'Invalid input. Seed and checkpoint must be numbers.' },
@@ -216,19 +170,16 @@ export async function POST(request: Request) {
     const safeCanvasHeight = canvasHeight || 600
     const startGapY = previousGapY ?? 0.5
 
-    // Format the prompt with checkpoint and previous gap info
     let prompt = LEVEL_GENERATION_PROMPT.replace('{checkpoint}', checkpoint.toString())
     if (previousGapY !== undefined) {
       prompt += `\n\nPrevious gap center Y position: ${previousGapY.toFixed(2)} (normalized 0-1). Ensure smooth transition from this position.`
     }
 
-    // Initialize with safe fallback (will be overwritten if generation succeeds)
     let levelData: LevelData = {
       seed: seed,
       chunks: []
     }
     
-    // Generate safe chunks as initial fallback
     let currentGapY = startGapY
     for (let i = 0; i < 20; i++) {
       const chunk = generateSafeChunk(currentGapY)
@@ -239,22 +190,18 @@ export async function POST(request: Request) {
     let validationAttempts = 0
     const maxAttempts = 3
 
-    // Try to generate a valid level (with retries)
     while (validationAttempts < maxAttempts) {
       try {
         let res;
         try {
-          // Use local model name if using local LLM, otherwise use Groq model name
           const useLocal = process.env.USE_LOCAL_LLM === 'true' || process.env.USE_LOCAL_LLM === '1'
           const localProvider = (process.env.LOCAL_LLM_PROVIDER || 'lmstudio').toLowerCase()
           
-          // Determine model name based on provider
-          let modelName = "llama-3.3-70b-versatile" // Groq default
+          let modelName = "llama-3.3-70b-versatile"
           if (useLocal) {
             if (localProvider === 'ollama') {
               modelName = process.env.LOCAL_LLM_MODEL || 'llama3.3:70b'
             } else {
-              // LM Studio and NVIDIA NIM use model names like "llama-3.3-70b-versatile" or custom names
               modelName = process.env.LOCAL_LLM_MODEL || 'llama-3.3-70b-versatile'
             }
           }
@@ -268,10 +215,9 @@ export async function POST(request: Request) {
               content: prompt + ` Seed: ${seed + validationAttempts}\n\nIMPORTANT: Return COMPLETE, valid JSON. Ensure the response includes all closing brackets (] and }). Do not truncate the response.` 
             }],
             temperature: 0.9,
-            max_tokens: 2000, // Increased to prevent truncation of 20 chunks
+            max_tokens: 2000,
           })
         } catch (groqError: unknown) {
-          // If Groq initialization fails (e.g., missing/invalid API key, slice error), use fallback
           const errorMessage = (groqError instanceof Error ? groqError.message : String(groqError))
           if (errorMessage.includes('GROQ_API_KEY') || 
               errorMessage.includes('slice') || 
@@ -279,34 +225,26 @@ export async function POST(request: Request) {
             console.error('Groq client initialization error:', errorMessage)
             throw new Error('Groq API configuration error - using safe fallback level')
           }
-          throw groqError // Re-throw other errors
+          throw groqError
         }
 
-        // Parse the response
         const content = res.choices[0]?.message?.content
         if (!content) {
           throw new Error('No content in response')
         }
 
-        // Clean the content (remove markdown code blocks if present)
         let cleanedContent = stripMarkdownCodeBlocks(content)
-        
-        // Further clean and fix JSON issues
         cleanedContent = cleanJSON(cleanedContent)
 
-        // Try to parse as JSON
         try {
           levelData = JSON.parse(cleanedContent)
         } catch (parseError) {
-          // If parsing fails, try to extract chunks from incomplete JSON
           const error = parseError instanceof Error ? parseError : new Error(String(parseError))
           console.warn('Failed to parse AI response, attempting to extract chunks:', error.message)
           
-          // Log a snippet of the problematic content (first 1000 chars)
           const contentSnippet = cleanedContent.substring(0, 1000)
           console.warn('Problematic content snippet:', contentSnippet)
           
-          // If the error mentions a specific position, try to show context
           if (error.message.includes('position')) {
             const positionMatch = error.message.match(/position (\d+)/)
             if (positionMatch) {
@@ -317,7 +255,6 @@ export async function POST(request: Request) {
             }
           }
           
-          // Try to extract valid chunks from incomplete JSON
           const extractedChunks = extractChunksFromIncompleteJSON(cleanedContent)
           
           if (extractedChunks && extractedChunks.length > 0) {
@@ -327,7 +264,6 @@ export async function POST(request: Request) {
               chunks: extractedChunks
             }
             
-            // Fill remaining chunks with safe generation if needed
             if (levelData.chunks.length < 20) {
               let currentGapY = levelData.chunks.length > 0
                 ? levelData.chunks[levelData.chunks.length - 1].gapY
@@ -340,7 +276,6 @@ export async function POST(request: Request) {
               }
             }
           } else {
-            // Could not extract chunks, generate safe fallback
             console.warn('Could not extract chunks from incomplete JSON, generating safe fallback')
             console.warn('Full problematic content:', cleanedContent)
             levelData = {
@@ -348,7 +283,6 @@ export async function POST(request: Request) {
               chunks: []
             }
             
-            // Generate safe chunks
             let currentGapY = startGapY
             for (let i = 0; i < 20; i++) {
               const chunk = generateSafeChunk(currentGapY)
@@ -358,17 +292,14 @@ export async function POST(request: Request) {
           }
         }
 
-        // Validate the level data
         const validation = validateLevelData(levelData, safeCanvasHeight, startGapY)
         
         if (validation.valid || validation.fixedChunks) {
-          // Use fixed chunks if available, otherwise use original
           if (validation.fixedChunks) {
             levelData.chunks = validation.fixedChunks
             console.log(`Level validated and fixed: ${validation.issues.length} issues resolved`)
           }
           
-          // Final validation: ensure all chunks are individually valid
           let currentGapY = startGapY
           const finalChunks: LevelChunk[] = []
           
@@ -379,14 +310,12 @@ export async function POST(request: Request) {
           }
           
           levelData.chunks = finalChunks
-          break // Success!
+          break
         } else {
-          // Validation failed, try again
           validationAttempts++
           console.warn(`Level validation failed (attempt ${validationAttempts}/${maxAttempts}):`, validation.issues)
           
           if (validationAttempts >= maxAttempts) {
-            // Generate completely safe fallback
             console.warn('Max validation attempts reached, generating safe fallback')
             levelData = {
               seed: seed,
@@ -406,7 +335,6 @@ export async function POST(request: Request) {
         console.error(`Level generation error (attempt ${validationAttempts}):`, error)
         
         if (validationAttempts >= maxAttempts) {
-          // Generate safe fallback
           levelData = {
             seed: seed,
             chunks: []
@@ -422,15 +350,12 @@ export async function POST(request: Request) {
       }
     }
 
-    // Final validation: ensure the response is valid JSON
     try {
       const jsonResponse = JSON.stringify(levelData)
-      // Try to parse it back to ensure it's valid
       JSON.parse(jsonResponse)
       return NextResponse.json(levelData)
     } catch (jsonError) {
       console.error('Final JSON validation failed:', jsonError)
-      // Generate completely safe fallback if final validation fails
       const safeData: LevelData = {
         seed: seed,
         chunks: []
@@ -448,15 +373,12 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error('Level generation error:', error)
     
-    // Return safe fallback data
-    // Try to get request body if available, otherwise use defaults
     let previousGapY = 0.5
     
     try {
       const body = await request.json()
       previousGapY = body.previousGapY ?? 0.5
     } catch {
-      // Request body already consumed or invalid, use defaults
     }
     
     const startGapY = previousGapY
@@ -477,5 +399,4 @@ export async function POST(request: Request) {
   }
 }
 
-// Debug logging for webpack chunk issue
 console.log('Level API route loaded');

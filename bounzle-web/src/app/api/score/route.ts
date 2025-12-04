@@ -6,7 +6,6 @@ export async function POST(request: Request) {
   try {
     const { score } = await request.json()
 
-    // Validate score
     if (typeof score !== 'number' || score < 0) {
       return NextResponse.json(
         { error: 'Invalid score. Score must be a positive number.' },
@@ -16,7 +15,6 @@ export async function POST(request: Request) {
 
     const supabase = await createSupabaseServerClient()
 
-    // Get the user session
     const { data: { session }, error: sessionError } = await supabase.auth.getSession()
     
     if (sessionError || !session) {
@@ -26,13 +24,12 @@ export async function POST(request: Request) {
       )
     }
 
-    // Insert score into database
     const { data, error } = await supabase
       .from('scores')
       .insert([
         {
           user_id: session.user.id,
-          score: Math.floor(score), // Ensure integer score
+          score: Math.floor(score),
           created_at: new Date().toISOString()
         }
       ])
@@ -41,7 +38,6 @@ export async function POST(request: Request) {
     if (error) {
       console.error('Error saving score:', error)
       
-      // Provide helpful error message if table doesn't exist
       if (error.code === 'PGRST205' || error.message?.includes('Could not find the table')) {
         return NextResponse.json(
           { 
@@ -68,12 +64,10 @@ export async function POST(request: Request) {
   }
 }
 
-// GET endpoint to fetch leaderboard
 export async function GET() {
   try {
     const supabase = await createSupabaseServerClient()
     
-    // Fetch top 50 scores
     const { data: scoresData, error: scoresError } = await supabase
       .from('scores')
       .select('id, score, created_at, user_id')
@@ -83,7 +77,6 @@ export async function GET() {
     if (scoresError) {
       console.error('Error fetching scores:', scoresError)
       
-      // Provide helpful error message if table doesn't exist
       if (scoresError.code === 'PGRST205' || scoresError.message?.includes('Could not find the table')) {
         return NextResponse.json(
           { 
@@ -100,12 +93,10 @@ export async function GET() {
       )
     }
 
-    // Handle case where no scores exist
     if (!scoresData || scoresData.length === 0) {
       return NextResponse.json([])
     }
 
-    // Fetch profiles for all user_ids
     const userIds = scoresData.map(score => score.user_id).filter(Boolean)
     let profilesMap = new Map()
     
@@ -115,7 +106,6 @@ export async function GET() {
         .select('id, username, avatar_url')
         .in('id', userIds)
       
-      // Log error but continue - profiles are optional
       if (profilesError) {
         console.warn('Error fetching profiles (continuing without profiles):', profilesError)
       } else if (profilesData) {
@@ -123,7 +113,6 @@ export async function GET() {
       }
     }
 
-    // Combine scores with profiles
     const data = scoresData.map(score => ({
       ...score,
       profiles: profilesMap.get(score.user_id) || { username: null, avatar_url: null }

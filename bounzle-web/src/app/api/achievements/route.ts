@@ -25,19 +25,16 @@ interface UnlockInput {
   unlocked_at?: string;
 }
 
-// GET /api/achievements - Get user's achievements and unlocks
 export async function GET() {
   try {
     const supabase = await createSupabaseServerClient();
     
-    // Get the user session
     const { data: { session }, error: sessionError } = await supabase.auth.getSession();
     
     if (sessionError || !session) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Fetch achievements
     const { data: achievements, error: achievementsError } = await supabase
       .from('achievements')
       .select('*')
@@ -49,7 +46,6 @@ export async function GET() {
       return NextResponse.json({ error: 'Failed to fetch achievements' }, { status: 500 });
     }
 
-    // Fetch unlocks
     const { data: unlocks, error: unlocksError } = await supabase
       .from('unlocks')
       .select('*')
@@ -71,12 +67,10 @@ export async function GET() {
   }
 }
 
-// POST /api/achievements - Save achievements and unlocks
 export async function POST(request: NextRequest) {
   try {
     const supabase = await createSupabaseServerClient();
     
-    // Get the user session
     const { data: { session }, error: sessionError } = await supabase.auth.getSession();
     
     if (sessionError || !session) {
@@ -90,7 +84,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Missing achievements or unlocks data' }, { status: 400 });
     }
 
-    // Upsert achievements
     if (Array.isArray(achievements) && achievements.length > 0) {
       const achievementsToInsert = achievements.map((ach: AchievementInput) => ({
         id: `${session.user.id}_${ach.achievement_id}`,
@@ -115,7 +108,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Upsert unlocks
     if (Array.isArray(unlocks) && unlocks.length > 0) {
       const unlocksToInsert = unlocks.map((unlock: UnlockInput) => ({
         id: `${session.user.id}_${unlock.unlock_id}`,

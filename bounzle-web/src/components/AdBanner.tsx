@@ -2,24 +2,13 @@
 
 import { useEffect, useState } from 'react';
 
-declare global {
-  interface Window {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    admob?: any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    adsbygoogle?: any;
-  }
-}
-
 export default function AdBanner() {
   const [isAdReady, setIsAdReady] = useState(false);
   const [isAdLoaded, setIsAdLoaded] = useState(false);
 
   useEffect(() => {
-    // Check if we're in a browser environment
     if (typeof window === 'undefined') return;
 
-    // Load AdMob script
     const loadAdMobScript = () => {
       if (window.admob) return;
       
@@ -34,37 +23,22 @@ export default function AdBanner() {
       document.head.appendChild(script);
     };
 
-    // Initialize AdMob
     const initializeAdMob = () => {
-      try {
-        // For web implementation, we'll use adsbygoogle
-        setIsAdReady(true);
-      } catch (error) {
-        console.error('Failed to initialize AdMob:', error);
-      }
+      setIsAdReady(true);
     };
 
-    // Load the script when component mounts
     loadAdMobScript();
 
-    // Clean up
     return () => {
-      // Remove any event listeners if needed
     };
   }, []);
 
   useEffect(() => {
     if (isAdReady && !isAdLoaded) {
-      // Load the ad after a short delay to ensure DOM is ready
       const timer = setTimeout(() => {
-        try {
-          // Push ad configuration to adsbygoogle
-          if (window.adsbygoogle) {
-            window.adsbygoogle.push({});
-            setIsAdLoaded(true);
-          }
-        } catch (error) {
-          console.error('Failed to load ad:', error);
+        if (window.adsbygoogle) {
+          window.adsbygoogle.push({});
+          setIsAdLoaded(true);
         }
       }, 1000);
 

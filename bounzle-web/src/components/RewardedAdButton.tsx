@@ -5,17 +5,6 @@ import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 
-declare global {
-  interface Window {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    admob?: any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    adsbygoogle?: any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    googletag?: any;
-  }
-}
-
 export default function RewardedAdButton({ 
   onReward, 
   disabled = false,
@@ -30,7 +19,6 @@ export default function RewardedAdButton({
   const [showAdModal, setShowAdModal] = useState(false);
   const [adCompleted, setAdCompleted] = useState(false);
   const adContainerRef = useRef<HTMLDivElement>(null);
-  const adSlotRef = useRef<string | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
