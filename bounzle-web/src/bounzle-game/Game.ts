@@ -3113,7 +3113,7 @@ export default class Game {
       
       // Update background parallax scrolling
       try {
-        this.renderer.updateBackground(scrollSpeed, deltaTime);
+        this.renderer.updateBackground(scrollSpeed, deltaTime, this.ball.position.y);
       } catch {
         console.error('[Game] Error updating background');
         // Continue - background update is non-critical
@@ -4545,8 +4545,8 @@ export default class Game {
       text,
       x: this.ball.position.x,
       y: this.ball.position.y,
-      life: 2000, // 2 seconds
-      maxLife: 2000,
+      life: 1000, // 1 second
+      maxLife: 1000,
       scale: 1.0,
       color,
     });

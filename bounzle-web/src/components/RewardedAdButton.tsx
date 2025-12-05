@@ -5,6 +5,14 @@ import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 
+// Get ad credentials from environment variables with fallback to test IDs
+const AD_PUBLISHER_ID = process.env.NEXT_PUBLIC_ADSENSE_PUBLISHER_ID || 
+                        process.env.NEXT_PUBLIC_ADMOB_PUBLISHER_ID || 
+                        'ca-pub-3940256099942544'; // Test publisher ID
+const AD_REWARDED_SLOT_ID = process.env.NEXT_PUBLIC_ADSENSE_REWARDED_SLOT_ID || 
+                            process.env.NEXT_PUBLIC_ADMOB_REWARDED_SLOT_ID || 
+                            '5224354917'; // Test ad slot
+
 export default function RewardedAdButton({ 
   onReward, 
   disabled = false,
@@ -19,6 +27,9 @@ export default function RewardedAdButton({
   const [showAdModal, setShowAdModal] = useState(false);
   const [adCompleted, setAdCompleted] = useState(false);
   const adContainerRef = useRef<HTMLDivElement>(null);
+  const observerRef = useRef<MutationObserver | null>(null);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const adElementRef = useRef<HTMLElement | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -33,7 +44,7 @@ export default function RewardedAdButton({
       }
       
       const script = document.createElement('script');
-      script.src = 'https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-3940256099942544';
+      script.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${AD_PUBLISHER_ID}`;
       script.async = true;
       script.crossOrigin = 'anonymous';
       script.onload = () => {
@@ -51,6 +62,58 @@ export default function RewardedAdButton({
     // Load the script when component mounts
     loadAdSenseScript();
   }, []);
+
+  // Cleanup effect when modal closes
+  useEffect(() => {
+    if (!showAdModal) {
+      // Clean up observer
+      if (observerRef.current) {
+        try {
+          observerRef.current.disconnect();
+        } catch (error) {
+          console.warn('Error disconnecting observer:', error);
+        }
+        observerRef.current = null;
+      }
+      
+      // Clear timeout
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+      
+      // Clean up ad container safely
+      if (adContainerRef.current) {
+        try {
+          // Safely remove ad element if it exists and is actually a child of the container
+          if (adElementRef.current) {
+            const parent = adElementRef.current.parentNode;
+            // Verify the element is actually a child of our container before removing
+            if (parent === adContainerRef.current) {
+              adContainerRef.current.removeChild(adElementRef.current);
+            } else if (parent) {
+              // Element is in a different parent, remove from that parent
+              parent.removeChild(adElementRef.current);
+            }
+            adElementRef.current = null;
+          }
+        } catch (error) {
+          // Element may have already been removed or parent changed
+          console.warn('Error removing ad element during cleanup:', error);
+          adElementRef.current = null;
+        }
+        
+        // Clear container content safely as fallback
+        try {
+          if (adContainerRef.current) {
+            adContainerRef.current.innerHTML = '';
+          }
+        } catch (error) {
+          console.warn('Error clearing ad container:', error);
+        }
+      }
+    }
+  }, [showAdModal]);
 
   const showRewardedAd = async () => {
     if (disabled) {
@@ -75,19 +138,36 @@ export default function RewardedAdButton({
     setShowAdModal(true);
     setAdCompleted(false);
     
-    // Load ad after modal is shown
-    setTimeout(() => {
-      loadRewardedAd();
-    }, 100);
+    // Load ad after modal is shown and rendered
+    // Use requestAnimationFrame to ensure DOM is ready
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        loadRewardedAd();
+      }, 300);
+    });
   };
 
   const loadRewardedAd = () => {
     if (!adContainerRef.current) {
       console.error('Ad container not available');
       // Fallback: allow completion after delay
-      setTimeout(() => {
+      timeoutRef.current = setTimeout(() => {
         handleAdComplete();
       }, 3000);
+      return;
+    }
+
+    // Check if container is visible and has dimensions
+    const rect = adContainerRef.current.getBoundingClientRect();
+    const isVisible = rect.width > 0 && rect.height > 0 && 
+                      adContainerRef.current.offsetParent !== null;
+    
+    if (!isVisible) {
+      console.warn('Ad container not visible or has no dimensions, retrying...');
+      // Retry after a short delay
+      timeoutRef.current = setTimeout(() => {
+        loadRewardedAd();
+      }, 200);
       return;
     }
 
@@ -99,21 +179,38 @@ export default function RewardedAdButton({
       const adElement = document.createElement('ins');
       adElement.className = 'adsbygoogle';
       adElement.style.display = 'block';
-      adElement.setAttribute('data-ad-client', 'ca-pub-3940256099942544'); // Test publisher ID
-      adElement.setAttribute('data-ad-slot', '5224354917'); // Test ad slot (interstitial style)
+      adElement.style.width = '100%';
+      adElement.style.height = '100%';
+      adElement.style.minWidth = '320px';
+      adElement.style.minHeight = '250px';
+      adElement.setAttribute('data-ad-client', AD_PUBLISHER_ID);
+      adElement.setAttribute('data-ad-slot', AD_REWARDED_SLOT_ID);
       adElement.setAttribute('data-ad-format', 'auto');
       adElement.setAttribute('data-full-width-responsive', 'true');
       
       adContainerRef.current.appendChild(adElement);
+      adElementRef.current = adElement;
       
-      // Push ad to Google AdSense
-      if (window.adsbygoogle) {
+      // Push ad to Google AdSense only if container is visible
+      if (window.adsbygoogle && isVisible) {
         try {
           (window.adsbygoogle = window.adsbygoogle || []).push({});
           console.log('Rewarded ad pushed to AdSense');
         } catch (error) {
           console.error('Error pushing ad:', error);
+          // Fallback: allow completion after delay
+          timeoutRef.current = setTimeout(() => {
+            handleAdComplete();
+          }, 3000);
+          return;
         }
+      } else {
+        console.warn('AdSense not available or container not visible');
+        // Fallback: allow completion after delay
+        timeoutRef.current = setTimeout(() => {
+          handleAdComplete();
+        }, 3000);
+        return;
       }
       
       // Set up observer to detect when ad is loaded
@@ -126,6 +223,8 @@ export default function RewardedAdButton({
         }
       });
       
+      observerRef.current = observer;
+      
       if (adContainerRef.current) {
         observer.observe(adContainerRef.current, {
           childList: true,
@@ -135,18 +234,21 @@ export default function RewardedAdButton({
       
       // Allow completion after minimum viewing time (15 seconds)
       // This ensures users actually see the ad
-      setTimeout(() => {
+      timeoutRef.current = setTimeout(() => {
         if (!adCompleted) {
           console.log('Minimum viewing time reached - allowing completion');
           handleAdComplete();
         }
-        observer.disconnect();
+        if (observerRef.current) {
+          observerRef.current.disconnect();
+          observerRef.current = null;
+        }
       }, 15000);
       
     } catch (error) {
       console.error('Failed to load rewarded ad:', error);
       // Fallback: allow completion after delay
-      setTimeout(() => {
+      timeoutRef.current = setTimeout(() => {
         handleAdComplete();
       }, 3000);
     }
@@ -163,17 +265,30 @@ export default function RewardedAdButton({
       description: "You can now continue playing!",
     });
     
-    // Close modal and give reward
+    // Execute reward callback first before cleanup to ensure it always runs
+    // Use try-catch to ensure reward executes even if there are errors
+    try {
+      onReward();
+    } catch (error) {
+      console.error('Error executing reward callback:', error);
+      // Still continue - don't block the user
+    }
+    
+    // Close modal after reward callback
     setTimeout(() => {
       setShowAdModal(false);
-      onReward();
     }, 500);
   };
 
   const handleCloseAd = () => {
     if (adCompleted) {
+      // Execute reward callback before closing
+      try {
+        onReward();
+      } catch (error) {
+        console.error('Error executing reward callback:', error);
+      }
       setShowAdModal(false);
-      onReward();
     } else {
       toast({
         title: "Please watch the ad",

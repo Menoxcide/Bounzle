@@ -87,6 +87,13 @@ export class Renderer {
     opacity: number;
   }> = [];
   
+  // Dynamic element generation tracking
+  private ballProgressY: number = 0;
+  private lastBallY: number = 0;
+  private animationTime: number = 0;
+  private lastElementGenerationY: number = 0;
+  private readonly ELEMENT_GENERATION_INTERVAL = 200; // Generate new elements every 200px of vertical progress
+  
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     const ctx = canvas.getContext('2d');
@@ -109,6 +116,12 @@ export class Renderer {
       const previousTheme = this.currentBackgroundTheme;
       this.currentLevel = level;
       this.currentBackgroundTheme = getBackgroundThemeForLevel(level);
+      
+      // Reset progress tracking on level change
+      this.ballProgressY = 0;
+      this.lastBallY = 0;
+      this.lastElementGenerationY = 0;
+      this.animationTime = 0;
       
       if (previousTheme !== this.currentBackgroundTheme && this.enableAdvancedEffects) {
         this.initializeBackgroundLayers();
@@ -155,12 +168,21 @@ export class Renderer {
     
     const themeConfig = getBackgroundThemeConfig(this.currentBackgroundTheme);
     
-    const layerCount = themeConfig.parallaxSpeeds.length;
-    for (let i = 0; i < layerCount; i++) {
-      const parallaxSpeed = themeConfig.parallaxSpeeds[i];
-      const baseElementCount = themeConfig.elementCounts[i] || 10;
-      const elementCount = Math.floor(baseElementCount * 0.6);
-      const opacity = 0.3 + (i * 0.1);
+    // Expand to 5-7 layers for more depth
+    const baseLayerCount = themeConfig.parallaxSpeeds.length;
+    const expandedLayerCount = Math.max(5, Math.min(7, baseLayerCount));
+    
+    // Create expanded parallax speeds array if needed
+    const parallaxSpeeds = expandedLayerCount > baseLayerCount 
+      ? this.expandParallaxSpeeds(themeConfig.parallaxSpeeds, expandedLayerCount)
+      : themeConfig.parallaxSpeeds;
+    
+    for (let i = 0; i < expandedLayerCount; i++) {
+      const parallaxSpeed = parallaxSpeeds[i];
+      const baseElementCount = themeConfig.elementCounts[i % themeConfig.elementCounts.length] || 10;
+      // Increase element count by 1.5-2x for more immersive background
+      const elementCount = Math.floor(baseElementCount * 1.8);
+      const opacity = 0.3 + (i * 0.08);
       
       const elementTypes = this.getElementTypesForLayer(themeConfig, i);
       
@@ -179,6 +201,24 @@ export class Renderer {
     }
   }
   
+  // Expand parallax speeds array to desired layer count
+  private expandParallaxSpeeds(baseSpeeds: number[], targetCount: number): number[] {
+    if (baseSpeeds.length >= targetCount) {
+      return baseSpeeds.slice(0, targetCount);
+    }
+    
+    const expanded: number[] = [...baseSpeeds];
+    const step = (baseSpeeds[baseSpeeds.length - 1] - baseSpeeds[0]) / (targetCount - 1);
+    
+    while (expanded.length < targetCount) {
+      const lastSpeed = expanded[expanded.length - 1];
+      const nextSpeed = Math.min(1.0, lastSpeed + step);
+      expanded.push(nextSpeed);
+    }
+    
+    return expanded;
+  }
+  
   private generateLevel1StaticBackground(): void {
     this.level1StaticElements = [];
     this.initSeededRandom(1); // Use seed 1 for Level 1
@@ -192,14 +232,14 @@ export class Renderer {
       purpleMuted: '#8b5cf6'
     };
     
-    // Generate stars (5-pointed) in yellow, red, purple - reduced count for performance
+    // Generate stars (5-pointed) in yellow, red, purple - expanded for immersive background
     const starColors = [colors.yellow, colors.red, colors.purple];
-    for (let i = 0; i < 10; i++) { // Reduced from 15 to 10
-      const x = this.random() * this.WORLD_WIDTH;
-      const y = this.random() * this.WORLD_HEIGHT;
-      const size = 15 + this.random() * 25; // 15-40px
+    for (let i = 0; i < 25; i++) { // Increased from 10 to 25
+      const x = this.random() * this.WORLD_WIDTH; // X in world space for scrolling
+      const y = this.random() * this.canvas.height; // Y in screen space (static)
+      const size = 15 + this.random() * 35; // 15-50px (more variety)
       const color = starColors[Math.floor(this.random() * starColors.length)];
-      const opacity = 0.4 + this.random() * 0.4; // 0.4-0.8
+      const opacity = 0.3 + this.random() * 0.5; // 0.3-0.8 (more variety)
       
       this.level1StaticElements.push({
         type: 'star',
@@ -211,12 +251,12 @@ export class Renderer {
       });
     }
     
-    // Generate circles in purple - reduced count for performance
-    for (let i = 0; i < 5; i++) { // Reduced from 8 to 5
-      const x = this.random() * this.WORLD_WIDTH;
-      const y = this.random() * this.WORLD_HEIGHT;
-      const size = 20 + this.random() * 30; // 20-50px
-      const opacity = 0.3 + this.random() * 0.3; // 0.3-0.6
+    // Generate circles in purple - expanded for immersive background
+    for (let i = 0; i < 12; i++) { // Increased from 5 to 12
+      const x = this.random() * this.WORLD_WIDTH; // X in world space for scrolling
+      const y = this.random() * this.canvas.height; // Y in screen space (static)
+      const size = 20 + this.random() * 40; // 20-60px (more variety)
+      const opacity = 0.25 + this.random() * 0.4; // 0.25-0.65 (more variety)
       
       this.level1StaticElements.push({
         type: 'circle',
@@ -228,14 +268,14 @@ export class Renderer {
       });
     }
     
-    // Generate polygons (irregular shapes) in teal and muted purple - reduced count for performance
+    // Generate polygons (irregular shapes) in teal and muted purple - expanded for immersive background
     const polygonColors = [colors.teal, colors.purpleMuted];
-    for (let i = 0; i < 4; i++) { // Reduced from 6 to 4
-      const x = this.random() * this.WORLD_WIDTH;
-      const y = this.random() * this.WORLD_HEIGHT;
-      const size = 25 + this.random() * 35; // 25-60px
+    for (let i = 0; i < 10; i++) { // Increased from 4 to 10
+      const x = this.random() * this.WORLD_WIDTH; // X in world space for scrolling
+      const y = this.random() * this.canvas.height; // Y in screen space (static)
+      const size = 25 + this.random() * 45; // 25-70px (more variety)
       const color = polygonColors[Math.floor(this.random() * polygonColors.length)];
-      const opacity = 0.35 + this.random() * 0.35; // 0.35-0.7
+      const opacity = 0.3 + this.random() * 0.4; // 0.3-0.7 (more variety)
       
       this.level1StaticElements.push({
         type: 'polygon',
@@ -255,6 +295,126 @@ export class Renderer {
       value = (value * 9301 + 49297) % 233280;
       return value / 233280;
     };
+  }
+  
+  // Update ball progress tracking for dynamic element generation
+  private updateBallProgress(ballY: number, deltaTime: number): void {
+    // Track cumulative vertical movement (absolute distance traveled)
+    const deltaY = Math.abs(ballY - this.lastBallY);
+    this.ballProgressY += deltaY;
+    this.lastBallY = ballY;
+    this.animationTime += deltaTime;
+    
+    // Generate new elements when progress threshold is reached
+    if (this.ballProgressY - this.lastElementGenerationY >= this.ELEMENT_GENERATION_INTERVAL) {
+      this.generateNewElementsForProgress();
+      this.lastElementGenerationY = this.ballProgressY;
+    }
+  }
+  
+  // Generate new background elements based on ball progress
+  private generateNewElementsForProgress(): void {
+    if (this.currentLevel === 1) {
+      // For Level 1, add new static elements
+      this.addNewLevel1Elements();
+      return;
+    }
+    
+    // For other levels, add elements to background layers
+    const themeConfig = getBackgroundThemeConfig(this.currentBackgroundTheme);
+    
+    // Add 1-3 new elements to random layers
+    const layersToUpdate = Math.min(3, this.backgroundLayers.length);
+    for (let i = 0; i < layersToUpdate; i++) {
+      const layerIndex = Math.floor(this.random() * this.backgroundLayers.length);
+      const layer = this.backgroundLayers[layerIndex];
+      const elementTypes = this.getElementTypesForLayer(themeConfig, layerIndex);
+      
+      // Generate 1-2 new elements for this layer
+      const newElementCount = 1 + Math.floor(this.random() * 2);
+      const newElements = this.generateThemeBackgroundElements(
+        newElementCount,
+        layer.parallaxSpeed,
+        elementTypes,
+        themeConfig,
+        layerIndex
+      );
+      
+      layer.elements.push(...newElements);
+      
+      // Remove old elements that have scrolled far off-screen (keep layer size manageable)
+      const maxElementsPerLayer = 50;
+      if (layer.elements.length > maxElementsPerLayer) {
+        // Remove elements that are far off-screen to the left
+        layer.elements = layer.elements.filter(el => el.x > -this.canvas.width * 2);
+        
+        // If still too many, remove oldest (first) elements
+        if (layer.elements.length > maxElementsPerLayer) {
+          layer.elements = layer.elements.slice(-maxElementsPerLayer);
+        }
+      }
+    }
+  }
+  
+  // Add new elements to Level 1 static background
+  private addNewLevel1Elements(): void {
+    const colors = {
+      red: '#e74c3c',
+      yellow: '#f39c12',
+      purple: '#9b59b6',
+      teal: '#1abc9c',
+      purpleMuted: '#8b5cf6'
+    };
+    
+    // Add 2-4 new elements randomly
+    const newElementCount = 2 + Math.floor(this.random() * 3);
+    const elementTypes: Array<'star' | 'circle' | 'polygon'> = ['star', 'circle', 'polygon'];
+    
+    for (let i = 0; i < newElementCount; i++) {
+      const type = elementTypes[Math.floor(this.random() * elementTypes.length)];
+      const x = this.WORLD_WIDTH + this.random() * this.canvas.width; // Start off-screen right
+      const y = this.random() * this.canvas.height; // Random Y in screen space
+      
+      let size: number;
+      let color: string;
+      let opacity: number;
+      
+      switch (type) {
+        case 'star':
+          size = 15 + this.random() * 35;
+          color = [colors.yellow, colors.red, colors.purple][Math.floor(this.random() * 3)];
+          opacity = 0.3 + this.random() * 0.5;
+          break;
+        case 'circle':
+          size = 20 + this.random() * 40;
+          color = colors.purple;
+          opacity = 0.25 + this.random() * 0.4;
+          break;
+        case 'polygon':
+          size = 25 + this.random() * 45;
+          color = [colors.teal, colors.purpleMuted][Math.floor(this.random() * 2)];
+          opacity = 0.3 + this.random() * 0.4;
+          break;
+      }
+      
+      this.level1StaticElements.push({
+        type,
+        x,
+        y,
+        size,
+        color,
+        opacity
+      });
+    }
+    
+    // Remove old elements that have scrolled far off-screen
+    const maxElements = 100;
+    if (this.level1StaticElements.length > maxElements) {
+      this.level1StaticElements = this.level1StaticElements.filter(el => el.x > -this.canvas.width * 2);
+      if (this.level1StaticElements.length > maxElements) {
+        this.level1StaticElements = this.level1StaticElements.slice(-maxElements);
+      }
+    }
   }
 
   // Get seeded random value (or regular random if not initialized)
@@ -546,9 +706,9 @@ export class Renderer {
     for (let i = 0; i < count; i++) {
       const typeIndex = Math.floor(this.random() * validTypes.length);
       const type = validTypes[typeIndex];
-      // Use world space coordinates - spread across world width and height
+      // X in world space for horizontal scrolling, Y in screen space (static)
       const x = this.random() * this.WORLD_WIDTH;
-      const y = this.random() * this.WORLD_HEIGHT;
+      const y = this.random() * this.canvas.height;
       
       // Size varies by element type and layer
       let size = 20 + this.random() * 80;
@@ -607,27 +767,43 @@ export class Renderer {
     return elements;
   }
   
-  updateBackground(scrollSpeed: number, deltaTime: number): void {
-    // Background elements are now in world space - they don't scroll horizontally
-    // The camera/viewport moves through the world space instead
-    // For hybrid approach: far parallax layers (parallaxSpeed < 0.3) can scroll for depth effect
+  updateBackground(scrollSpeed: number, deltaTime: number, ballY: number): void {
+    // Update ball progress tracking
+    this.updateBallProgress(ballY, deltaTime);
     
+    // Update Level 1 static elements (horizontal scrolling only)
     if (this.currentLevel === 1 && this.level1StaticElements.length > 0) {
+      for (const element of this.level1StaticElements) {
+        // Scroll horizontally (slow parallax)
+        element.x -= scrollSpeed * deltaTime * 0.2;
+        
+        // Wrap around when off-screen
+        if (element.x + element.size < 0) {
+          element.x = this.WORLD_WIDTH + this.random() * this.canvas.width;
+        }
+      }
     }
     
+    // Update background layers with transformations
     for (const layer of this.backgroundLayers) {
       for (const element of layer.elements) {
-        if (element.parallaxSpeed < 0.3) {
-          element.x -= scrollSpeed * deltaTime * element.parallaxSpeed;
-          
-          if (element.x + element.size < 0) {
-            element.x = this.WORLD_WIDTH + this.random() * this.canvas.width;
-            element.y = this.random() * this.WORLD_HEIGHT;
-            if (this.random() < 0.3) {
-              element.size = 20 + this.random() * 80;
-              element.opacity = 0.2 + this.random() * 0.4;
-            }
-          }
+        // Horizontal scrolling with parallax effect
+        element.x -= scrollSpeed * deltaTime * element.parallaxSpeed;
+        
+        // Wrap around when off-screen
+        if (element.x + element.size < 0) {
+          element.x = this.WORLD_WIDTH + this.random() * this.canvas.width;
+          element.y = this.random() * this.canvas.height; // Regenerate Y in screen space
+        }
+        
+        // Apply rotation transformation
+        if (element.rotation !== undefined) {
+          // Rotation speed varies by element type and layer
+          const rotationSpeed = 10 + element.parallaxSpeed * 20; // 10-30 degrees per second
+          element.rotation = (element.rotation + rotationSpeed * deltaTime) % 360;
+        } else {
+          // Initialize rotation if not set
+          element.rotation = this.random() * 360;
         }
       }
     }
@@ -639,7 +815,7 @@ export class Renderer {
     }
     
     const elementScreenX = element.x;
-    const elementScreenY = element.y - this.cameraOffsetY;
+    const elementScreenY = element.y;
     
     const viewportCenterX = this.canvas.width / 2;
     const viewportCenterY = this.canvas.height / 2;
@@ -671,8 +847,15 @@ export class Renderer {
     
     this.ctx.save();
     
+    // Apply pulsing opacity transformation
+    const baseOpacity = element.opacity;
+    const pulseAmount = 0.15; // 15% opacity variation
+    const pulseSpeed = 1.5; // Pulses per second
+    const pulsePhase = this.animationTime * pulseSpeed + element.x * 0.01 + element.y * 0.01; // Unique phase per element
+    const pulsedOpacity = baseOpacity + Math.sin(pulsePhase) * pulseAmount * baseOpacity;
+    
     const lodOpacityMultiplier = useLOD ? 0.6 : 1.0;
-    this.ctx.globalAlpha = element.opacity * layer.opacity * lodOpacityMultiplier;
+    this.ctx.globalAlpha = Math.max(0.1, Math.min(1.0, pulsedOpacity)) * layer.opacity * lodOpacityMultiplier;
     const color = element.color || layer.color;
     
     const screenX = elementScreenX;
@@ -684,10 +867,6 @@ export class Renderer {
       this.ctx.rotate(element.rotation * Math.PI / 180);
       this.ctx.translate(-screenX, -screenY);
     }
-    
-    // Add glow effects before drawing elements (skip for LOD)
-    const time = Date.now() / 1000; // For pulsing effects
-    const pulsePhase = time * 2 + element.x * 0.01; // Unique phase per element
     
     // Use effective size for rendering
     // Use effective size for rendering (don't modify element)
@@ -3099,11 +3278,11 @@ export class Renderer {
       this.ctx.fillStyle = gradient;
       this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
       
-      // Draw static glowing shapes (in world space, account for camera offset)
+      // Draw static glowing shapes (in screen space, static position)
       for (const element of this.level1StaticElements) {
-        // Check if element is visible in viewport (accounting for camera offset)
-        const elementScreenX = element.x; // X is in world space
-        const elementScreenY = element.y - this.cameraOffsetY; // Y is affected by camera offset
+        // Check if element is visible in viewport (screen space coordinates)
+        const elementScreenX = element.x; // X is in world space for horizontal scrolling
+        const elementScreenY = element.y; // Y is in screen space (static)
         
         // Only draw if element is within viewport bounds (with buffer)
         const buffer = element.size * 2;
@@ -3117,10 +3296,9 @@ export class Renderer {
         this.ctx.save();
         this.ctx.globalAlpha = element.opacity;
         
-        // Apply camera offset manually since background is drawn before camera transform
-        // Draw elements at their screen positions (world position - camera offset)
+        // Draw elements at their screen positions (static in screen space)
         const screenX = element.x;
-        const screenY = element.y - this.cameraOffsetY;
+        const screenY = element.y;
         
         // Add glow effect
         this.drawGlowAura(screenX, screenY, element.size, element.color, 'soft');
@@ -5015,9 +5193,9 @@ export class Renderer {
     
     // Set composite operation to prevent smearing
     this.ctx.globalCompositeOperation = 'source-over';
-    
-    // Set alpha and transform
     this.ctx.globalAlpha = alpha;
+    
+    // Apply transform
     this.ctx.translate(notification.x, notification.y);
     this.ctx.scale(notification.scale, notification.scale);
     
@@ -5030,7 +5208,7 @@ export class Renderer {
     // Begin path to ensure clean rendering
     this.ctx.beginPath();
     
-    // Draw glow effect
+    // Draw glow effect - shadow properties are scoped to this save/restore block
     this.ctx.shadowBlur = 10;
     this.ctx.shadowColor = notification.color;
     this.ctx.shadowOffsetX = 0;
@@ -5039,14 +5217,14 @@ export class Renderer {
     // Draw the text
     this.ctx.fillText(notification.text, 0, 0);
     
-    // Immediately reset shadow properties to prevent smearing
+    // Explicitly reset shadow properties before restore to prevent smearing
+    // (restore() should handle this, but being explicit ensures clean state)
     this.ctx.shadowBlur = 0;
     this.ctx.shadowColor = 'transparent';
     this.ctx.shadowOffsetX = 0;
     this.ctx.shadowOffsetY = 0;
-    this.ctx.globalAlpha = 1.0;
-    this.ctx.globalCompositeOperation = 'source-over';
     
+    // Restore will reset: transform, alpha, composite operation, font, fillStyle, textAlign, textBaseline
     this.ctx.restore();
   }
   

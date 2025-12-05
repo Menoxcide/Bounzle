@@ -1,10 +1,18 @@
 // AdMob service for handling ads in the Bounzle game
 /// <reference lib="dom" />
 
+// Get ad unit IDs from environment variables with fallback to test IDs
+const DEFAULT_BANNER_AD_UNIT_ID = 'ca-app-pub-3940256099942544/6300978111';
+const DEFAULT_REWARDED_AD_UNIT_ID = 'ca-app-pub-3940256099942544/5224354917';
+const DEFAULT_PUBLISHER_ID = 'ca-pub-3940256099942544';
+
 class AdMobService {
   private initialized: boolean = false;
-  private bannerAdUnitId: string = 'ca-app-pub-3940256099942544/6300978111';
-  private rewardedAdUnitId: string = 'ca-app-pub-3940256099942544/5224354917';
+  private bannerAdUnitId: string = process.env.NEXT_PUBLIC_ADMOB_BANNER_AD_UNIT_ID || DEFAULT_BANNER_AD_UNIT_ID;
+  private rewardedAdUnitId: string = process.env.NEXT_PUBLIC_ADMOB_REWARDED_AD_UNIT_ID || DEFAULT_REWARDED_AD_UNIT_ID;
+  private publisherId: string = process.env.NEXT_PUBLIC_ADSENSE_PUBLISHER_ID || 
+                                  process.env.NEXT_PUBLIC_ADMOB_PUBLISHER_ID || 
+                                  DEFAULT_PUBLISHER_ID;
 
   async initialize(): Promise<void> {
     if (this.initialized) return Promise.resolve();
@@ -95,7 +103,7 @@ class AdMobService {
     const ins = document.createElement('ins');
     ins.className = 'adsbygoogle';
     ins.style.display = 'block';
-    ins.setAttribute('data-ad-client', 'ca-pub-3940256099942544');
+    ins.setAttribute('data-ad-client', this.publisherId);
     ins.setAttribute('data-ad-slot', this.bannerAdUnitId);
     ins.setAttribute('data-ad-format', 'auto');
     ins.setAttribute('data-full-width-responsive', 'true');
